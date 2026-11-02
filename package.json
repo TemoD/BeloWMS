@@ -1,0 +1,56 @@
+{
+  "name": "belo-wms",
+  "productName": "Belo WMS",
+  "version": "1.0.0",
+  "description": "საწყობის მარაგის და გახარჯვის აღრიცხვა — ლოკალური, ოფლაინ",
+  "main": "src/main/main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test test/",
+    "dist:win": "electron-builder --win nsis --x64",
+    "dist:mac": "electron-builder --mac dir",
+    "make-icon": "electron scripts/make-icon.js",
+    "smoke": "BELO_SMOKE=1 BELO_DATA=./.smoke/data BELO_OUT=./.smoke/out electron ."
+  },
+  "devDependencies": {
+    "electron": "44.10.1",
+    "electron-builder": "26.17.0",
+    "@fontsource/jetbrains-mono": "5.3.0",
+    "@fontsource/noto-sans-georgian": "5.3.0"
+  },
+  "build": {
+    "appId": "ge.belo.wms",
+    "productName": "Belo WMS",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Belo WMS",
+      "deleteAppDataOnUninstall": false,
+      "uninstallDisplayName": "Belo WMS"
+    },
+    "copyright": "© 2026"
+  }
+}

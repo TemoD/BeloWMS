@@ -1,0 +1,5 @@
+node_modules/
+dist/
+.smoke/
+dist-win.log
+.DS_Store
