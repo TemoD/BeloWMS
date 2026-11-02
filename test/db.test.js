@@ -13,6 +13,7 @@ function fresh() {
   DB.open(':memory:');
   day(2026, 11, 2);
   DB.exec('setup.complete', { company: { name: 'ტესტ კომპანია' }, whName: 'მთავარი' });
+  DB.exec('location.bulkAdd', { wh: 1, codes: 'A-01-01\nA-01-02' });
   const sup = DB.exec('supplier.save', { name: 'მომწოდებელი' });
   const pid = DB.exec('product.save', { art: 'OF-1', name: 'ზეთის ფილტრი', uom: 'ცალი', min: 2, locs: { 1: 'A-01-01' } });
   const vid = DB.exec('vehicle.save', { plate: 'AA-001-AA', vin: 'MR0HA3CD1M0512345', make: 'Toyota', model: 'Hilux', year: 2021, km: 1000 });
@@ -94,18 +95,57 @@ test('transfers need the second warehouse and enough stock', () => {
   DB.exec('po.create', { sup, lines: [{ pid, qty: 5, price: 1 }] });
   assert.throws(() => DB.exec('transfer.create', { pid, from: 1, qty: 1 }), /მეორე საწყობი/);
   DB.exec('settings.set', { key: 'wh2', value: true });
+  DB.exec('location.save', { wh: 2, code: 'B-01-01' });
   assert.throws(() => DB.exec('transfer.create', { pid, from: 1, qty: 6 }), /არასაკმარისი/);
+  assert.throws(() => DB.exec('transfer.create', { pid, from: 1, qty: 1, loc: 'A-01-01' }), /არ არის სიაში/);
   DB.exec('transfer.create', { pid, from: 1, qty: 2, loc: 'B-01-01' });
   const p = prod(DB.getState(), pid);
   assert.deepEqual([p.stock[1].q, p.stock[2].q, p.stock[2].loc], [3, 2, 'B-01-01']);
   assert.throws(() => DB.exec('settings.set', { key: 'wh2', value: false }), /მეორე საწყობში ნაშთია/);
 });
 
-test('validation: duplicate article, bad VIN, bad location', () => {
+test('validation: duplicate article, bad VIN, unknown location', () => {
   fresh();
   assert.throws(() => DB.exec('product.save', { art: 'of-1', name: 'x' }), /უკვე არსებობს/);
   assert.throws(() => DB.exec('vehicle.save', { plate: 'X', vin: 'SHORT', make: 'a', model: 'b' }), /VIN/);
-  assert.throws(() => DB.exec('product.save', { art: 'Z', name: 'z', locs: { 1: 'shelf 3' } }), /ლოკაციის/);
+  assert.throws(() => DB.exec('product.save', { art: 'Z', name: 'z', locs: { 1: 'shelf 3' } }), /არ არის სიაში/);
+});
+
+test('locations: free codes, case-insensitive, rename moves products, delete only when empty', () => {
+  const { pid } = fresh();
+  DB.exec('location.save', { wh: 1, code: 'გარე საწყობი', note: 'ეზოში' });
+  assert.throws(() => DB.exec('location.save', { wh: 1, code: 'a-01-01' }), /უკვე არსებობს/);
+  assert.equal(DB.exec('location.bulkAdd', { wh: 1, codes: 'ZONE-3\na-01-02\n\nZONE-4' }), 2);
+  DB.exec('product.save', { id: pid, art: 'OF-1', name: 'ზეთის ფილტრი', uom: 'ცალი', locs: { 1: 'zone-3' } });
+  assert.equal(prod(DB.getState(), pid).stock[1].loc, 'ZONE-3');
+  DB.exec('location.save', { wh: 1, oldCode: 'ZONE-3', code: 'ZONE-03' });
+  assert.equal(prod(DB.getState(), pid).stock[1].loc, 'ZONE-03');
+  assert.throws(() => DB.exec('location.delete', { wh: 1, code: 'ZONE-03' }), /პროდუქტია/);
+  DB.exec('location.delete', { wh: 1, code: 'ZONE-4' });
+  DB.exec('location.save', { wh: 1, oldCode: 'A-01-02', code: 'A-01-02', active: false });
+  assert.throws(() => DB.exec('location.assign', { pid, wh: 1, loc: 'A-01-02' }), /გამორთულია/);
+  const st = DB.getState();
+  assert.deepEqual(st.locations.map(l => l.code).sort(), ['A-01-01', 'A-01-02', 'ZONE-03', 'გარე საწყობი']);
+});
+
+test('serial numbers: optional, one per unit, never on two vehicles at once', () => {
+  const { sup, pid, vid } = fresh();
+  DB.exec('po.create', { sup, lines: [{ pid, qty: 5, price: 10 }] });
+  const a = DB.exec('so.create', { vid, resp: 'ა' });
+  DB.exec('so.issue', { id: a, pid, qty: 1 });
+  assert.throws(() => DB.exec('so.issue', { id: a, pid, qty: 1, serials: 'SN1, SN2' }), /მეტია რაოდენობაზე/);
+  DB.exec('so.issue', { id: a, pid, qty: 2, serials: 'SN1, SN2' });
+  const b = DB.exec('so.create', { vid, resp: 'ბ' });
+  assert.throws(() => DB.exec('so.issue', { id: b, pid, qty: 1, serials: 'sn2' }), /SN2.*გაცემულია|უკვე გაცემულია/);
+  let line = so(DB.getState(), a).parts[1];
+  assert.deepEqual(line.serials, ['SN1', 'SN2']);
+  DB.exec('so.return', { id: a, lid: line.lid, qty: 1, serials: ['SN2'] });
+  DB.exec('so.issue', { id: b, pid, qty: 1, serials: 'SN2' });
+  const first = so(DB.getState(), a).parts[0];
+  DB.exec('so.setSerials', { id: a, lid: first.lid, serials: 'SN9' });
+  assert.deepEqual(so(DB.getState(), a).parts[0].serials, ['SN9']);
+  line = so(DB.getState(), a).parts[1];
+  assert.deepEqual([line.retSerials, line.ret], [['SN2'], 1]);
 });
 
 test('catalog learns products used twice on the same model', () => {

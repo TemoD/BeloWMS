@@ -16,7 +16,7 @@
       <div class="toolbar">
         <div class="gsearch">
           <svg class="i" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
-          <input id="gs" placeholder="ძებნა: სახელმწიფო ნომერი, VIN, არტიკული, ლოკაცია, ორდერის №…" oninput="gSearch()" onfocus="gSearch()" onblur="setTimeout(()=>{$('#gsr').hidden=true},180)" autocomplete="off">
+          <input id="gs" placeholder="ძებნა: სახელმწიფო ნომერი, VIN, არტიკული, ლოკაცია, ორდერის №, S/N…" oninput="gSearch()" onfocus="gSearch()" onblur="setTimeout(()=>{$('#gsr').hidden=true},180)" autocomplete="off">
           <div class="gsr" id="gsr" hidden></div>
         </div>
         <button class="btn primary" onclick="newSO()"><svg class="i" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>სერვის ორდერი</button>
@@ -43,7 +43,8 @@
 <datalist id="dlp"></datalist>
 <datalist id="dls"></datalist>
 <datalist id="dlr"></datalist>
-<datalist id="dlloc"></datalist>
+<datalist id="dlloc1"></datalist>
+<datalist id="dlloc2"></datalist>
 <script src="app.js"></script>
 </body>
 </html>

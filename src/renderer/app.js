@@ -103,26 +103,19 @@ function statusBadge(o) {
   return '<span class="badge b-closed">დახურული</span>';
 }
 const stockBadge = p => isLow(p) ? '<span class="badge b-low">მცირე მარაგი</span>' : '<span class="badge b-ok">საკმარისი</span>';
-function rackLayout() {
-  const rows = new Set(['A', 'B', 'C', 'D']); let sh = 3, bn = 4;
-  S.products.forEach(p => [1, 2].forEach(w => {
-    const m = /^([A-Z])-(\d{2})-(\d{2})$/.exec(p.stock[w].loc || '');
-    if (m) { rows.add(m[1]); sh = Math.max(sh, +m[2]); bn = Math.max(bn, +m[3]); }
-  }));
-  return { rows: [...rows].sort(), sh, bn };
-}
-function allLocs() {
-  const L = rackLayout(), r = [];
-  L.rows.forEach(a => { for (let s = 1; s <= L.sh; s++) for (let b = 1; b <= L.bn; b++) r.push(`${a}-${pad2(s)}-${pad2(b)}`); });
-  return r;
-}
+const natural = (a, b) => a.localeCompare(b, 'ka', { numeric: true, sensitivity: 'base' });
+const sameCode = (a, b) => String(a || '').toLowerCase() === String(b || '').toLowerCase();
+const locsOf = (wh, activeOnly = false) => S.locations.filter(l => l.wh === +wh && (!activeOnly || l.active)).sort((a, b) => natural(a.code, b.code));
+const productsAt = (wh, code) => S.products.filter(p => sameCode(p.stock[wh].loc, code));
+// Every serial on a service-order line that is still on the vehicle (issued, not returned).
+const outSerials = l => l.serials.filter(s => !l.retSerials.some(x => sameCode(x, s)));
 function fillDatalists() {
   $('#dlp').innerHTML = S.products.map(p => `<option value="${p.id} · ${esc(p.art)} · ${esc(p.name)}">`).join('');
   $('#dls').innerHTML = [...new Set(S.sos.flatMap(o => o.svcs.map(s => s.name)))].map(n => `<option value="${esc(n)}">`).join('');
   const rs = [];
   S.sos.slice().sort((a, b) => autoBase(b).localeCompare(autoBase(a))).forEach(o => { if (o.resp && !rs.includes(o.resp)) rs.push(o.resp); });
   $('#dlr').innerHTML = rs.map(r => `<option value="${esc(r)}">`).join('');
-  $('#dlloc').innerHTML = allLocs().map(l => `<option value="${l}">`).join('');
+  [1, 2].forEach(w => { $('#dlloc' + w).innerHTML = locsOf(w, true).map(l => `<option value="${esc(l.code)}">${esc(l.note)}</option>`).join(''); });
 }
 
 /* ================= UI shell ================= */
@@ -212,7 +205,10 @@ function gSearch() {
   const vs = S.vehicles.filter(v => norm(v.plate).includes(n) || norm(v.vin).includes(n) || modelKey(v).toLowerCase().includes(ql)).slice(0, 5);
   const ps = S.products.filter(p => norm(p.art).includes(n) || norm(p.id).includes(n) || p.name.toLowerCase().includes(ql) || whs().some(w => norm(p.stock[w].loc).startsWith(n))).slice(0, 6);
   const os = [...S.sos, ...S.pos].filter(o => norm(o.id).includes(n)).slice(0, 5);
+  const sns = [];
+  S.sos.forEach(o => o.parts.forEach(l => l.serials.forEach(s => { if (norm(s).includes(n)) sns.push({ o, l, s }); })));
   let h = '';
+  if (sns.length) h += '<h6>სერიული ნომრები</h6>' + sns.slice(0, 6).map(({ o, l, s }) => `<button onmousedown="go('so','${o.id}')"><span class="mono"><b>${esc(s)}</b></span><span>${esc(P(l.pid).name)}</span><span class="sub" style="margin-left:auto">${esc(V(o.vid).plate)} · ${o.id}${l.retSerials.some(x => sameCode(x, s)) ? ' · დაბრუნებულია' : ''}</span></button>`).join('');
   if (vs.length) h += '<h6>ტექნიკა</h6>' + vs.map(v => `<button onmousedown="go('vehicle','${v.id}')">${plate(v.plate)}<span>${esc(modelKey(v))}</span><span class="mono sub" style="margin-left:auto">${esc(v.vin)}</span></button>`).join('');
   if (ps.length) h += '<h6>პროდუქტები</h6>' + ps.map(p => `<button onmousedown="openProduct('${p.id}')"><span class="mono">${esc(p.art)}</span><span>${esc(p.name)}</span><span class="sub" style="margin-left:auto">${ic('pin')} ${esc(p.stock[1].loc || '—')} · ${qfmt(totQ(p))} ${esc(p.uom)}</span></button>`).join('');
   if (os.length) h += '<h6>დოკუმენტები</h6>' + os.map(o => `<button onmousedown="${o.vid ? `go('so','${o.id}')` : `viewPO('${o.id}')`}"><span class="mono">${o.id}</span><span class="sub">${fmtD(o.date)}</span>${o.vid ? statusBadge(o) : ''}</button>`).join('');
@@ -226,6 +222,7 @@ VIEWS.dashboard = () => {
   const ym = TODAY.slice(0, 7), mc = S.sos.filter(o => o.date.startsWith(ym)).reduce((a, o) => a + soCost(o), 0);
   const hasStock = S.products.some(p => totQ(p) > 0);
   const steps = [
+    [S.locations.length > 0, 'ლოკაციების სია', "go('stock')", 'თაროები, ზონები — ან შეიქმნება CSV იმპორტისას'],
     [S.products.length > 0, 'პროდუქტების იმპორტი CSV-დან', "openImport('products')", 'ან დაამატეთ ხელით „პროდუქტები“ გვერდზე'],
     [S.vehicles.length > 0, 'ტექნიკის იმპორტი CSV-დან', "openImport('vehicles')", 'ან დაამატეთ ხელით „ტექნიკის რეესტრში“'],
     [hasStock, 'საწყისი ნაშთის ჩატვირთვა', "openImport('stock')", 'არსებული ნაშთი, ღირებულება, ლოკაცია'],
@@ -330,9 +327,9 @@ VIEWS.so = id => {
    <div>
     <div class="card"><header><h3>გაცემული ნაწილები</h3><span class="sub">${o.parts.length} ხაზი</span></header>
      <div class="tw"><table class="t"><thead><tr><th>არტიკული</th><th>დასახელება</th>${wh2 ? '<th>საწყობი</th>' : ''}<th class="num">გაცემული</th><th class="num">დაბრუნებული</th><th class="num">ფასი</th><th class="num">ჯამი</th><th></th></tr></thead><tbody>
-     ${o.parts.map(l => { const p = P(l.pid), net = l.qty - l.ret; return `<tr><td class="mono">${esc(p.art)}<div class="sub">${p.id}</div></td><td>${esc(p.name)}</td>${wh2 ? `<td>${esc(S.wh[l.wh])}</td>` : ''}<td class="num">${qfmt(l.qty)} ${esc(p.uom)}</td><td class="num">${l.ret ? qfmt(l.ret) : '—'}</td><td class="num">${money(l.price)}</td><td class="num"><b>${money(net * l.price)}</b></td><td>${!closed && net > 0 ? btn('დაბრუნება', `retPart('${o.id}',${l.lid})`, 'sm ghost', 'undo') : ''}</td></tr>`; }).join('') || emptyRow(wh2 ? 8 : 7, 'ნაწილი ჯერ არ გაცემულა — აირჩიეთ ქვემოთ ან რეკომენდაციიდან')}
+     ${o.parts.map(l => { const p = P(l.pid), net = l.qty - l.ret; return `<tr><td class="mono">${esc(p.art)}<div class="sub">${p.id}</div></td><td>${esc(p.name)}${l.serials.length ? `<div class="sub mono" style="margin-top:2px">S/N: ${l.serials.map(s => `<span style="white-space:nowrap">${l.retSerials.some(x => sameCode(x, s)) ? `<s title="დაბრუნებულია">${esc(s)}</s>` : esc(s)}</span>`).join(', ')}</div>` : ''}</td>${wh2 ? `<td>${esc(S.wh[l.wh])}</td>` : ''}<td class="num">${qfmt(l.qty)} ${esc(p.uom)}</td><td class="num">${l.ret ? qfmt(l.ret) : '—'}</td><td class="num">${money(l.price)}</td><td class="num"><b>${money(net * l.price)}</b></td><td style="white-space:nowrap">${!closed ? btn('S/N', `editSerials('${o.id}',${l.lid})`, 'sm ghost', '', false) : ''}${!closed && net > 0 ? `<button class="btn sm ghost" title="დაბრუნება საწყობში" onclick="retPart('${o.id}',${l.lid})">${ic('undo')}</button>` : ''}</td></tr>`; }).join('') || emptyRow(wh2 ? 8 : 7, 'ნაწილი ჯერ არ გაცემულა — აირჩიეთ ქვემოთ ან რეკომენდაციიდან')}
      </tbody><tfoot><tr><td colspan="${wh2 ? 6 : 5}">ნაწილები სულ</td><td class="num">${money(partsCost(o))}</td><td></td></tr></tfoot></table></div>
-     ${closed ? '' : `<div class="addrow"><input id="sop" list="dlp" placeholder="არტიკული, კოდი ან დასახელება…" oninput="soWarn('${o.id}')" autocomplete="off"><input id="soqty" type="number" min="0" step="any" value="1" class="w80" title="რაოდენობა" oninput="soWarn('${o.id}')">${whSelect('sowh', 1, `soWarn('${o.id}')`)}<button class="btn primary" onclick="addPart('${o.id}')">${ic('arrowOut')}გაცემა</button></div><div id="sowarn" style="padding:0 16px"></div>`}
+     ${closed ? '' : `<div class="addrow"><input id="sop" list="dlp" placeholder="არტიკული, კოდი ან დასახელება…" oninput="soWarn('${o.id}')" autocomplete="off"><input id="soqty" type="number" min="0" step="any" value="1" class="w80" title="რაოდენობა" oninput="soWarn('${o.id}')"><input id="sosn" class="mono w160" style="width:200px" autocomplete="off" placeholder="სერიული № (არასავალდ.)" title="რამდენიმე — მძიმით გამოყოფილი">${whSelect('sowh', 1, `soWarn('${o.id}')`)}<button class="btn primary" onclick="addPart('${o.id}')">${ic('arrowOut')}გაცემა</button></div><div id="sowarn" style="padding:0 16px"></div>`}
     </div>
     <div class="card"><header><h3>მომსახურება</h3><span class="sub">თავისუფალი დასახელება · ფასი არასავალდებულოა</span></header>
      <div class="tw"><table class="t"><thead><tr><th>დასახელება</th><th class="num">ფასი</th><th></th></tr></thead><tbody>
@@ -367,18 +364,30 @@ async function addPart(oid, pid) {
   const o = SO(oid), p = pid ? P(pid) : findProduct($('#sop').value);
   if (!p) return toast('აირჩიეთ პროდუქტი სიიდან', 'err');
   const qty = pid ? 1 : $('#soqty').value, wh = pid ? 1 : +($('#sowh')?.value || 1), wasCat = inCatalog(modelKey(V(o.vid)), p.id);
-  await call('so.issue', { id: oid, pid: p.id, wh, qty }, () => `გაცემულია: ${p.name} × ${qfmt(+qty)} · ნაშთი ${qfmt(P(p.id).stock[wh].q)}` + (wasCat ? '' : ' · კატალოგი განახლდა'));
+  const serials = pid ? '' : $('#sosn').value;
+  await call('so.issue', { id: oid, pid: p.id, wh, qty, serials }, () => `გაცემულია: ${p.name} × ${qfmt(+qty)} · ნაშთი ${qfmt(P(p.id).stock[wh].q)}` + (serials.trim() ? ' · S/N შენახულია' : '') + (wasCat ? '' : ' · კატალოგი განახლდა'));
+}
+function editSerials(oid, lid) {
+  const l = SO(oid).parts.find(x => x.lid === lid), p = P(l.pid);
+  openModal('სერიული ნომრები', `<div class="note">${ic('info')}<div><b>${esc(p.name)}</b> · <span class="mono">${esc(p.art)}</span><br>გაცემულია ${qfmt(l.qty)} ${esc(p.uom)} — მაქსიმუმ ${Math.floor(l.qty)} სერიული ნომერი. არასავალდებულოა.</div></div>
+   <div class="field"><label>სერიული ნომრები — თითო სტრიქონზე ან მძიმით გამოყოფილი</label><textarea id="snl" rows="5" class="mono" autofocus>${esc(l.serials.join('\n'))}</textarea>${l.retSerials.length ? `<span class="hint">დაბრუნებული: ${l.retSerials.map(esc).join(', ')}</span>` : ''}</div>`,
+  btn('გაუქმება', 'closeModal()') + btn('შენახვა', `saveSerials('${oid}',${lid})`, 'primary', 'check'));
+}
+async function saveSerials(oid, lid) {
+  if (await call('so.setSerials', { id: oid, lid, serials: $('#snl').value }, 'სერიული ნომრები შენახულია')) closeModal();
 }
 function retPart(oid, lid) {
-  const l = SO(oid).parts.find(x => x.lid === lid), p = P(l.pid), net = l.qty - l.ret;
+  const l = SO(oid).parts.find(x => x.lid === lid), p = P(l.pid), net = l.qty - l.ret, out = outSerials(l);
   openModal('ნაწილის დაბრუნება საწყობში', `<div class="note">${ic('undo')}<div><b>${esc(p.name)}</b><br><span class="mono">${esc(p.art)}</span> · გაცემულია ${qfmt(net)} ${esc(p.uom)}</div></div>
-   <div class="field"><label class="req">დასაბრუნებელი რაოდენობა</label><input id="rq" type="number" min="0" max="${net}" step="any" value="${net}" autofocus></div>
+   <div class="field"><label class="req">დასაბრუნებელი რაოდენობა</label><input id="rq" type="number" min="0" max="${net}" step="any" value="${out.length ? 1 : net}" autofocus></div>
+   ${out.length ? `<div class="field"><label>რომელი სერიული ნომერი ბრუნდება</label><div class="chips">${out.map(s => `<label class="chip" style="cursor:pointer"><input type="checkbox" class="rsn" value="${esc(s)}" onchange="const n=document.querySelectorAll('.rsn:checked').length;if(n)$('#rq').value=n"><span class="mono">${esc(s)}</span></label>`).join('')}</div><span class="hint">მონიშვნისას რაოდენობა ავტომატურად შეიცვლება</span></div>` : ''}
    <div class="field"><label>მიზეზი</label><select id="rr"><option>არ დასჭირდა</option><option>არასწორი ნაწილი</option><option>დეფექტი</option><option>სხვა</option></select></div>`,
   btn('გაუქმება', 'closeModal()') + btn('დაბრუნება', `doRet('${oid}',${lid})`, 'primary', 'undo'));
 }
 async function doRet(oid, lid) {
   const l = SO(oid).parts.find(x => x.lid === lid), p = P(l.pid), q = $('#rq').value;
-  if (await call('so.return', { id: oid, lid, qty: q, reason: $('#rr').value }, `დაბრუნდა საწყობში: ${p.name} × ${q} → ${p.stock[l.wh].loc || S.wh[l.wh]}`)) closeModal();
+  const serials = [...document.querySelectorAll('.rsn:checked')].map(x => x.value);
+  if (await call('so.return', { id: oid, lid, qty: q, reason: $('#rr').value, serials }, `დაბრუნდა საწყობში: ${p.name} × ${q}${serials.length ? ' (S/N ' + serials.join(', ') + ')' : ''} → ${p.stock[l.wh].loc || S.wh[l.wh]}`)) closeModal();
 }
 async function addSvc(oid) {
   const pr = $('#svp').value;
@@ -481,7 +490,7 @@ function openProduct(id, fromPO = false) {
     <div class="field"><label>მინ. ნაშთი</label><input id="pm" type="number" min="0" step="any" value="${p ? p.min : 0}"></div>
     <div class="field"><label>საშ. ღირებულება</label><input id="pc" type="number" min="0" step="any" value="${p ? Math.round(p.cost * 100) / 100 : ''}" ${p ? 'disabled' : ''} placeholder="₾"><span class="hint">${p ? 'ითვლება შესყიდვებიდან' : 'საწყისი, თუ ცნობილია'}</span></div>
    </div>
-   <div class="grid2">${whs().map(w => `<div class="field"><label>${ic('pin')} ლოკაცია — ${esc(S.wh[w])}</label><input id="pl${w}" class="mono" list="dlloc" value="${esc(p ? p.stock[w].loc : '')}" placeholder="მაგ. A-02-03"><span class="hint">რიგი-თარო-უჯრა${p ? ` · ნაშთი ${qfmt(p.stock[w].q)} ${esc(p.uom)}` : ''}</span></div>`).join('')}</div>
+   <div class="grid2">${whs().map(w => `<div class="field"><label>${ic('pin')} ლოკაცია — ${esc(S.wh[w])}</label><input id="pl${w}" class="mono" list="dlloc${w}" autocomplete="off" value="${esc(p ? p.stock[w].loc : '')}" placeholder="${locsOf(w, true).length ? 'აირჩიეთ სიიდან' : 'ჯერ დაამატეთ ლოკაციები'}"><span class="hint">ლოკაციების სიიდან${p ? ` · ნაშთი ${qfmt(p.stock[w].q)} ${esc(p.uom)}` : ''}</span></div>`).join('')}</div>
    ${p ? `<div class="field"><label>რომელ ტექნიკაზე ყენდება (კატალოგი)</label><div class="chips">${fits.map(m => `<span class="chip">${ic('car')}${esc(m)}</span>`).join('') || '<span class="sub">ჯერ არ არის მიბმული</span>'}</div></div>
    <div class="field"><label>ბოლო მოძრაობები</label>${mv.length ? `<table class="t" style="border:1px solid var(--line)">${mv.map(m => `<tr><td>${fmtD(m.date)}</td><td>${(MOVE_T[m.type] || [m.type])[0]}</td><td class="mono">${esc(m.ref)}</td><td class="num">${moveSign(m.type)}${qfmt(m.qty)} ${esc(p.uom)}</td></tr>`).join('')}</table>` : '<span class="sub">მოძრაობა არ არის</span>'}</div>` : ''}`,
   (p && S.settings.wh2 ? btn('გადაადგილება', `openTransfer('${p.id}')`, 'ghost', 'swap') : '') + btn('გაუქმება', fromPO ? 'reopenPO()' : 'closeModal()') + btn('შენახვა', `saveProduct(${p ? `'${p.id}'` : 'null'},${fromPO})`, 'primary', 'check'));
@@ -494,40 +503,72 @@ async function saveProduct(id, fromPO) {
 }
 
 /* ================= stock & locations ================= */
-let stWh = 1, stQ = '', stSel = null;
+let stWh = 1, stQ = '', stSel = null, stEmpty = false, stOff = false;
 VIEWS.stock = () => {
   if (!S.settings.wh2) stWh = 1;
-  const n = norm(stQ), ql = stQ.toLowerCase(), L = rackLayout();
-  const at = loc => S.products.filter(p => p.stock[stWh].loc === loc);
-  const hit = loc => n && (norm(loc).startsWith(n) || at(loc).some(p => p.name.toLowerCase().includes(ql) || norm(p.art).includes(n)));
-  const hits = n ? allLocs().filter(hit) : [], sel = stSel ? at(stSel) : [];
-  return ph('საწყობი და ლოკაციები', 'ლოკაციური აღრიცხვა: თაროების ნუმერაცია რიგი-თარო-უჯრა (მაგ. A-01-02)',
-    S.settings.wh2 ? `<div class="seg">${[1, 2].map(w => `<button class="${stWh === w ? 'on' : ''}" onclick="stWh=${w};stSel=null;render()">${esc(S.wh[w])}</button>`).join('')}</div>` + btn('გადაადგილება საწყობებს შორის', 'openTransfer()', '', 'swap') : '') +
-    `<div class="filters"><div class="gsearch" style="max-width:420px">${ic('search')}<input id="stq" placeholder="ლოკაცია (A-01) ან პროდუქტი…" value="${esc(stQ)}" oninput="stQ=this.value;stSel=null;render();refocus('#stq')"></div>
-   ${n ? `<span class="sub">ნაპოვნია ${hits.length} ლოკაცია</span>${btn('გასუფთავება', "stQ='';render()", 'ghost sm')}` : ''}</div>
+  const ql = stQ.trim().toLowerCase(), n = norm(stQ);
+  const rows = locsOf(stWh).map(l => ({ ...l, ps: productsAt(stWh, l.code) }));
+  const match = r => !ql || r.code.toLowerCase().includes(ql) || r.note.toLowerCase().includes(ql) || r.ps.some(p => p.name.toLowerCase().includes(ql) || norm(p.art).includes(n));
+  const list = rows.filter(r => (stOff || r.active) && (!stEmpty || !r.ps.length) && match(r));
+  const unplaced = S.products.filter(p => !p.stock[stWh].loc && p.stock[stWh].q > 0);
+  const sel = stSel === '' ? { code: '', note: '', active: true, ps: unplaced } : rows.find(r => sameCode(r.code, stSel));
+  const value = ps => ps.reduce((a, p) => a + p.stock[stWh].q * p.cost, 0);
+  const offN = rows.filter(r => !r.active).length;
+  return ph('საწყობი და ლოკაციები', 'ლოკაციების სია: ნებისმიერი კოდი (მაგ. A-01-02, ZONE-3, გარე საწყობი). პროდუქტს ენიჭება მხოლოდ სიაში არსებული ლოკაცია.',
+    (S.settings.wh2 ? `<div class="seg">${[1, 2].map(w => `<button class="${stWh === w ? 'on' : ''}" onclick="stWh=${w};stSel=null;render()">${esc(S.wh[w])}</button>`).join('')}</div>` + btn('გადაადგილება', 'openTransfer()', '', 'swap') : '') +
+    btn('სიით დამატება', 'openBulkLoc()', '', 'plus') + btn('ახალი ლოკაცია', 'openLocation()', 'primary', 'plus')) +
+  `<div class="filters"><div class="gsearch" style="max-width:420px">${ic('search')}<input id="stq" placeholder="ლოკაცია, აღწერა ან პროდუქტი…" value="${esc(stQ)}" oninput="stQ=this.value;render();refocus('#stq')"></div>
+   <label style="display:flex;gap:6px;align-items:center;cursor:pointer"><input type="checkbox" ${stEmpty ? 'checked' : ''} onchange="stEmpty=this.checked;render()">მხოლოდ თავისუფალი</label>
+   ${offN ? `<label style="display:flex;gap:6px;align-items:center;cursor:pointer"><input type="checkbox" ${stOff ? 'checked' : ''} onchange="stOff=this.checked;render()">გამორთულიც (${offN})</label>` : ''}
+   <span class="sub">${list.length} / ${rows.length} ლოკაცია</span></div>
   <div class="cols">
-   <div class="card"><header><h3>${esc(S.wh[stWh])} — თაროების რუკა</h3></header><div class="body">
-    <div class="racks ${n ? 'searching' : ''}">${L.rows.map(r => `<div class="rack"><h4><span class="tag man">რიგი ${r}</span>${esc(S.settings.racks[r] || '')}<a style="margin-left:auto;cursor:pointer;color:var(--faint)" title="რიგის დასახელება" onclick="renameRack('${r}')">${ic('edit')}</a></h4>
-     ${Array.from({ length: L.sh }, (_, s) => s + 1).map(s => `<div class="shelf" style="grid-template-columns:42px repeat(${L.bn},minmax(0,1fr))"><div class="lbl">თარო ${pad2(s)}</div>${Array.from({ length: L.bn }, (_, b) => b + 1).map(b => { const loc = `${r}-${pad2(s)}-${pad2(b)}`, ps = at(loc); return `<div class="cell ${ps.length ? '' : 'empty-c'} ${hit(loc) ? 'hit' : ''} ${stSel === loc ? 'sel' : ''}" onclick="stSel='${loc}';render()" title="${loc}"><div class="c">${loc}</div><div class="p">${ps.length ? esc(ps[0].name) + (ps.length > 1 ? ' +' + (ps.length - 1) : '') : 'თავისუფალი'}</div></div>`; }).join('')}</div>`).join('')}
-    </div>`).join('')}</div></div></div>
+   <div class="card"><div class="tw"><table class="t"><thead><tr><th>კოდი</th><th>აღწერა</th><th class="num">პროდუქტი</th><th class="num">ღირებულება</th><th>სტატუსი</th></tr></thead><tbody>
+    ${list.map(r => `<tr class="click" ${sameCode(stSel, r.code) ? 'style="background:var(--accent-bg)"' : ''} onclick="stSel=this.dataset.c;render()" data-c="${esc(r.code)}"><td class="mono"><b>${esc(r.code)}</b></td><td>${esc(r.note) || '<span class="sub">—</span>'}</td><td class="num">${r.ps.length || '<span class="sub">თავისუფალი</span>'}</td><td class="num">${r.ps.length ? money(value(r.ps)) : ''}</td><td>${r.active ? '<span class="badge b-ok">აქტიური</span>' : '<span class="badge b-closed">გამორთული</span>'}</td></tr>`).join('') || emptyRow(5, rows.length ? 'ვერ მოიძებნა' : 'ლოკაცია ჯერ არ არის — დააჭირეთ „ახალი ლოკაცია“ ან „სიით დამატება“')}
+    ${unplaced.length && !ql && !stEmpty ? `<tr class="click" ${stSel === '' ? 'style="background:var(--accent-bg)"' : ''} onclick="stSel='';render()"><td><span class="badge b-auto">ლოკაციის გარეშე</span></td><td class="sub">ნაშთი აქვს, ლოკაცია არ აქვს</td><td class="num">${unplaced.length}</td><td class="num">${money(value(unplaced))}</td><td></td></tr>` : ''}
+   </tbody></table></div></div>
    <div>
-    <div class="card"><header><h3>${stSel ? `${ic('pin')} ${stSel}` : 'ლოკაციის დეტალები'}</h3>${stSel ? `<div class="acts">${btn('პროდუქტის მინიჭება', `assignLoc('${stSel}')`, 'sm', 'plus')}</div>` : ''}</header>
-     ${stSel ? (sel.map(p => `<div class="rec"><div class="n"><div>${esc(p.name)}</div><div class="sub mono">${esc(p.art)} · ${p.id}</div></div><div class="num"><b>${qfmt(p.stock[stWh].q)}</b> <span class="sub">${esc(p.uom)}</span></div>${S.settings.wh2 ? btn('', `openTransfer('${p.id}')`, 'sm ghost', 'swap') : ''}${btn('', `openProduct('${p.id}')`, 'sm ghost', 'edit')}</div>`).join('') || '<div class="empty">ლოკაცია თავისუფალია</div>') : '<div class="empty">აირჩიეთ უჯრა რუკაზე</div>'}
+    <div class="card"><header><h3>${sel ? (sel.code ? `${ic('pin')} ${esc(sel.code)}` : 'ლოკაციის გარეშე') : 'ლოკაციის დეტალები'}</h3>${sel && sel.code ? `<div class="acts">${btn('', `openLocation(stSel)`, 'sm ghost', 'edit')}${sel.ps.length ? '' : btn('', `deleteLocation(stSel)`, 'sm ghost danger', 'x')}</div>` : ''}</header>
+     ${sel ? `${sel.note ? `<div class="body sub" style="padding-bottom:0">${esc(sel.note)}</div>` : ''}${sel.code && !sel.active ? `<div class="body" style="padding-bottom:0"><span class="badge b-closed">გამორთულია — ახალ პროდუქტს ვერ მიენიჭება</span></div>` : ''}
+      ${sel.ps.map(p => `<div class="rec"><div class="n"><div>${esc(p.name)}</div><div class="sub mono">${esc(p.art)} · ${p.id}</div></div><div class="num"><b>${qfmt(p.stock[stWh].q)}</b> <span class="sub">${esc(p.uom)}</span></div>${S.settings.wh2 ? btn('', `openTransfer('${p.id}')`, 'sm ghost', 'swap') : ''}${btn('', `openProduct('${p.id}')`, 'sm ghost', 'edit')}</div>`).join('') || '<div class="empty">ლოკაცია თავისუფალია</div>'}
+      ${sel.code && sel.active ? `<div class="addrow">${btn('პროდუქტის მინიჭება', 'assignLoc(stSel)', 'sm', 'plus')}</div>` : ''}` : '<div class="empty">აირჩიეთ ლოკაცია სიიდან</div>'}
     </div>
-    ${n ? `<div class="card"><header><h3>ძებნის შედეგი</h3></header>${hits.flatMap(l => at(l).map(p => `<div class="rec" style="cursor:pointer" onclick="stSel='${l}';render()"><span class="tag man mono">${l}</span><div class="n"><div>${esc(p.name)}</div><div class="sub mono">${esc(p.art)}</div></div><b>${qfmt(p.stock[stWh].q)}</b><span class="sub">${esc(p.uom)}</span></div>`)).join('') || '<div class="empty">ამ ლოკაციებზე პროდუქტი არ არის</div>'}</div>` : ''}
     ${S.settings.wh2 && S.transfers.length ? `<div class="card"><header><h3>ბოლო გადაადგილებები</h3></header>${S.transfers.slice(0, 6).map(t => { const p = P(t.pid); return `<div class="rec"><span class="tag mono">${t.id}</span><div class="n"><div>${esc(p.name)}</div><div class="sub">${esc(S.wh[t.from])} → ${esc(S.wh[t.to])} · ${fmtD(t.date)}</div></div><b>${qfmt(t.qty)}</b><span class="sub">${esc(p.uom)}</span></div>`; }).join('')}</div>` : ''}
-    <div class="note">${ic('info')}<div>ლოკაციის კოდი: <b>რიგი</b> (ლათინური ასო) · <b>თარო</b> (01, 02…) · <b>უჯრა</b> (01, 02…). ახალი რიგი ან თარო რუკაზე ავტომატურად გამოჩნდება, როცა პროდუქტს ასეთ ლოკაციას მიანიჭებთ.</div></div>
+    <div class="note">${ic('info')}<div>ლოკაციის კოდი თავისუფალია. გადარქმევისას მასზე მყოფი პროდუქტები ახალ კოდზე გადადის. წაშლა შესაძლებელია მხოლოდ ცარიელი ლოკაციის; გამორთული ლოკაცია ახალ პროდუქტს არ ენიჭება.</div></div>
    </div>
   </div>`;
 };
-function renameRack(r) {
-  openModal('რიგი ' + r, `<div class="field"><label>რიგის დასახელება</label><input id="rkn" autofocus value="${esc(S.settings.racks[r] || '')}" placeholder="მაგ. ფილტრები და ნაწილები"></div>`,
-    btn('გაუქმება', 'closeModal()') + btn('შენახვა', `saveRack('${r}')`, 'primary', 'check'));
+function openLocation(code) {
+  const l = code ? S.locations.find(x => x.wh === stWh && sameCode(x.code, code)) : null;
+  openModal(l ? 'ლოკაცია ' + l.code : 'ახალი ლოკაცია — ' + S.wh[stWh], `
+   <div class="field"><label class="req">კოდი</label><input id="lcode" class="mono" autofocus value="${esc(l ? l.code : '')}" maxlength="30" placeholder="მაგ. A-01-02, ZONE-3, გარე საწყობი">${l ? `<span class="hint">გადარქმევისას ${productsAt(stWh, l.code).length} პროდუქტი ახალ კოდზე გადავა</span>` : ''}</div>
+   <div class="field"><label>აღწერა</label><input id="lnote" value="${esc(l ? l.note : '')}" maxlength="120" placeholder="მაგ. ფილტრები, ზედა თარო"></div>
+   ${l ? `<label style="display:flex;gap:8px;align-items:center;cursor:pointer"><input type="checkbox" id="lact" ${l.active ? 'checked' : ''}>აქტიური (შეიძლება მიენიჭოს პროდუქტს)</label>` : ''}`,
+  btn('გაუქმება', 'closeModal()') + btn('შენახვა', `saveLocation(${l ? `'${esc(jsq(l.code))}'` : 'null'})`, 'primary', 'check'));
 }
-async function saveRack(r) { if (await call('settings.set', { key: 'rackName', value: { row: r, name: $('#rkn').value } }, 'შენახულია')) closeModal(); }
+async function saveLocation(oldCode) {
+  const act = $('#lact');
+  const code = await call('location.save', { wh: stWh, code: $('#lcode').value, oldCode, note: $('#lnote').value, active: act ? act.checked : true }, oldCode ? 'ლოკაცია განახლდა' : 'ლოკაცია დაემატა');
+  if (!code) return;
+  closeModal(); stSel = code; render();
+}
+function openBulkLoc() {
+  openModal('ლოკაციების დამატება სიით — ' + S.wh[stWh], `<div class="field"><label class="req">კოდები — თითო სტრიქონზე ერთი</label><textarea id="lbulk" rows="10" class="mono" autofocus placeholder="A-01-01&#10;A-01-02&#10;ZONE-3&#10;გარე საწყობი"></textarea><span class="hint">შეგიძლიათ ჩასვათ Excel-ის სვეტიდან. არსებული კოდები გამოტოვდება.</span></div>`,
+    btn('გაუქმება', 'closeModal()') + btn('დამატება', 'saveBulkLoc()', 'primary', 'plus'));
+}
+async function saveBulkLoc() {
+  const n = await call('location.bulkAdd', { wh: stWh, codes: $('#lbulk').value }, r => (r === true ? 0 : r) + ' ახალი ლოკაცია დაემატა');
+  if (n !== undefined) closeModal();
+}
+function deleteLocation(code) {
+  openModal('ლოკაციის წაშლა', `<div class="note warn">${ic('alert')}<div>წაიშლება ლოკაცია <b class="mono">${esc(code)}</b> (${esc(S.wh[stWh])}).</div></div>`,
+    btn('გაუქმება', 'closeModal()') + btn('წაშლა', `doDeleteLocation('${esc(jsq(code))}')`, 'primary', 'x'));
+}
+async function doDeleteLocation(code) {
+  if (await call('location.delete', { wh: stWh, code }, 'ლოკაცია წაიშალა')) { closeModal(); stSel = null; render(); }
+}
 function assignLoc(loc) {
-  openModal('პროდუქტის მინიჭება — ' + loc, `<div class="field"><label class="req">პროდუქტი</label><input id="alp" list="dlp" autofocus placeholder="არტიკული ან დასახელება…"></div><div class="note">${ic('info')}<div>პროდუქტის წინა ლოკაცია (${esc(S.wh[stWh])}) შეიცვლება <b>${loc}</b>-ით.</div></div>`,
-    btn('გაუქმება', 'closeModal()') + btn('მინიჭება', `doAssign('${loc}')`, 'primary', 'pin'));
+  openModal('პროდუქტის მინიჭება — ' + loc, `<div class="field"><label class="req">პროდუქტი</label><input id="alp" list="dlp" autofocus placeholder="არტიკული ან დასახელება…"></div><div class="note">${ic('info')}<div>პროდუქტის წინა ლოკაცია (${esc(S.wh[stWh])}) შეიცვლება <b>${esc(loc)}</b>-ით.</div></div>`,
+    btn('გაუქმება', 'closeModal()') + btn('მინიჭება', `doAssign('${esc(jsq(loc))}')`, 'primary', 'pin'));
 }
 async function doAssign(loc) {
   const p = findProduct($('#alp').value);
@@ -545,15 +586,18 @@ function openTransfer(pid) {
    <div class="grid2"><div class="field"><label>საიდან</label><select id="trf" onchange="$('#trl').dataset.auto='1';trInfo()">${[1, 2].map(w => `<option value="${w}" ${w === f ? 'selected' : ''}>${esc(S.wh[w])}</option>`).join('')}</select></div>
     <div class="field"><label>სად</label><input id="trt" disabled></div></div>
    <div class="grid2"><div class="field"><label class="req">რაოდენობა</label><input id="trq" type="number" min="0" step="any" value="1" ${p ? 'autofocus' : ''}></div>
-    <div class="field"><label>${ic('pin')} ლოკაცია მიმღებ საწყობში</label><input id="trl" class="mono" list="dlloc" data-auto="1" oninput="this.dataset.auto=''" placeholder="A-01-01"></div></div>
+    <div class="field"><label>${ic('pin')} ლოკაცია მიმღებ საწყობში</label><input id="trl" class="mono" list="dlloc2" autocomplete="off" data-auto="1" oninput="this.dataset.auto=''" placeholder="სიიდან"></div></div>
    <div id="trinfo"></div>`, btn('გაუქმება', 'closeModal()') + btn('გადაადგილება', 'doTransfer()', 'primary', 'swap'));
   trInfo();
 }
 function trInfo() {
   const p = findProduct($('#trp').value), f = +$('#trf').value, t = f === 1 ? 2 : 1;
   $('#trt').value = S.wh[t];
+  $('#trl').setAttribute('list', 'dlloc' + t);
   if (!p) { $('#trinfo').innerHTML = ''; return; }
-  if ($('#trl').dataset.auto) $('#trl').value = p.stock[t].loc || p.stock[f].loc || '';
+  // Suggest the product's location in the receiving warehouse, else the same code if it exists there.
+  const same = locsOf(t, true).find(l => sameCode(l.code, p.stock[f].loc));
+  if ($('#trl').dataset.auto) $('#trl').value = p.stock[t].loc || (same ? same.code : '');
   $('#trinfo').innerHTML = `<div class="note">${ic('info')}<div><b>${esc(p.name)}</b><br>${esc(S.wh[f])}: <b>${qfmt(p.stock[f].q)} ${esc(p.uom)}</b> (${esc(p.stock[f].loc || '—')}) · ${esc(S.wh[t])}: <b>${qfmt(p.stock[t].q)} ${esc(p.uom)}</b> (${esc(p.stock[t].loc || '—')})</div></div>`;
 }
 async function doTransfer() {
@@ -802,7 +846,7 @@ function impRender() {
     ${btn('შაბლონი', 'impTemplate()', 'ghost', 'download')}</div>
    <div class="sub" style="margin:10px 0 12px">სვეტების თანმიმდევრობა: ${d.cols.map(c => `<span class="tag">${c}</span>`).join(' ')}</div>
    ${ch.length ? `<div class="tw" style="max-height:340px;border:1px solid var(--line);border-radius:8px"><table class="t"><thead><tr><th>#</th>${d.cols.map(c => `<th>${c}</th>`).join('')}<th>სტატუსი</th></tr></thead><tbody>
-    ${ch.slice(0, 300).map((r, i) => `<tr class="${r.st}"><td class="sub">${i + 1}</td>${r.c.map(x => `<td>${esc(x) || '<span class="sub">—</span>'}</td>`).join('')}<td>${r.st === 'new' ? '<span class="badge b-ok">ახალი</span>' : r.st === 'upd' ? '<span class="badge b-open">განახლდება</span>' : `<span class="badge b-low">შეცდომა</span><div class="sub" style="color:var(--bad)">${esc(r.msg)}</div>`}</td></tr>`).join('')}
+    ${ch.slice(0, 300).map((r, i) => `<tr class="${r.st}"><td class="sub">${i + 1}</td>${r.c.map(x => `<td>${esc(x) || '<span class="sub">—</span>'}</td>`).join('')}<td>${r.st === 'new' ? '<span class="badge b-ok">ახალი</span>' : r.st === 'upd' ? '<span class="badge b-open">განახლდება</span>' : `<span class="badge b-low">შეცდომა</span><div class="sub" style="color:var(--bad)">${esc(r.msg)}</div>`}${r.st !== 'err' && r.msg ? `<div class="sub">${esc(r.msg)}</div>` : ''}</td></tr>`).join('')}
    </tbody></table></div>${ch.length > 300 ? `<div class="sub" style="margin-top:6px">ნაჩვენებია პირველი 300 სტრიქონი ${ch.length}-დან</div>` : ''}` : ''}`;
   $('#impsum').textContent = ch.length ? `${imp.name}: ${n} ახალი · ${u} განახლდება · ${e} შეცდომა (გამოტოვდება)` : '';
   $('#impgo').disabled = !(n + u);
@@ -845,7 +889,7 @@ function printSO(id) {
     <tr><th>მარკა / მოდელი</th><td>${esc(modelKey(v))}${v.year ? ', ' + esc(v.year) : ''}</td><th>გარბენი</th><td>${qfmt(o.km)} კმ</td></tr>
     <tr><th>პასუხისმგებელი პირი</th><td colspan="3"><b>${esc(o.resp)}</b></td></tr></table>
    <h3>გაცემული ნაწილები</h3><table><thead><tr><th>#</th><th>არტიკული</th><th>დასახელება</th><th>გაცემ.</th><th>დაბრ.</th><th>ერთ.</th><th>ფასი</th><th>ჯამი</th></tr></thead><tbody>
-   ${o.parts.map((l, i) => { const p = P(l.pid); return `<tr><td>${i + 1}</td><td class="mono">${esc(p.art)}</td><td>${esc(p.name)}</td><td class="num">${qfmt(l.qty)}</td><td class="num">${l.ret ? qfmt(l.ret) : ''}</td><td>${esc(p.uom)}</td><td class="num">${money(l.price)}</td><td class="num">${money((l.qty - l.ret) * l.price)}</td></tr>`; }).join('') || '<tr><td colspan="8">—</td></tr>'}
+   ${o.parts.map((l, i) => { const p = P(l.pid); return `<tr><td>${i + 1}</td><td class="mono">${esc(p.art)}</td><td>${esc(p.name)}${l.serials.length ? `<div style="font-size:10px;margin-top:2px">S/N: ${l.serials.map(s => l.retSerials.some(x => sameCode(x, s)) ? esc(s) + ' (დაბრ.)' : esc(s)).join(', ')}</div>` : ''}</td><td class="num">${qfmt(l.qty)}</td><td class="num">${l.ret ? qfmt(l.ret) : ''}</td><td>${esc(p.uom)}</td><td class="num">${money(l.price)}</td><td class="num">${money((l.qty - l.ret) * l.price)}</td></tr>`; }).join('') || '<tr><td colspan="8">—</td></tr>'}
    </tbody><tfoot><tr><td colspan="7">ნაწილები სულ</td><td class="num">${money(partsCost(o))}</td></tr></tfoot></table>
    <h3>მომსახურება</h3><table><thead><tr><th>#</th><th>დასახელება</th><th>ფასი</th></tr></thead><tbody>${o.svcs.map((s, i) => `<tr><td style="width:24px">${i + 1}</td><td>${esc(s.name)}</td><td class="num" style="width:110px">${s.price != null ? money(s.price) : '—'}</td></tr>`).join('') || '<tr><td colspan="3">—</td></tr>'}</tbody></table>
    <div class="sh-tot">სულ: ${money(soCost(o))}</div>

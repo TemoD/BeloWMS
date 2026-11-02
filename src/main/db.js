@@ -47,6 +47,12 @@ INSERT INTO warehouses VALUES (1,'მთავარი საწყობი'),
 INSERT INTO uoms VALUES ('ცალი',1),('ლიტრი',2),('კომპლექტი',3),('მეტრი',4),('კგ',5);
 INSERT INTO settings VALUES ('autoClose','7'),('wh2','0'),('backupSchedule','close'),('backupDir',''),('lastBackup',''),
   ('company','{}'),('racks','{}'),('setupDone','0');
+`, `
+CREATE TABLE locations(wh_id INTEGER NOT NULL REFERENCES warehouses(id), code TEXT NOT NULL COLLATE NOCASE,
+  note TEXT NOT NULL DEFAULT '', active INTEGER NOT NULL DEFAULT 1, PRIMARY KEY(wh_id, code));
+INSERT OR IGNORE INTO locations(wh_id, code) SELECT DISTINCT wh_id, loc FROM stock WHERE loc <> '';
+ALTER TABLE so_parts ADD COLUMN serials TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE so_parts ADD COLUMN ret_serials TEXT NOT NULL DEFAULT '[]';
 `];
 
 /* ---------- low-level helpers ---------- */
@@ -84,11 +90,44 @@ function nextNo(table, prefix, width = 4) {
 const str = (v, max = 200) => String(v ?? '').trim().slice(0, max);
 const num = v => (typeof v === 'number' ? v : String(v ?? '').trim() === '' ? NaN : +String(v).trim().replace(',', '.'));
 const r4 = n => Math.round(n * 1e4) / 1e4;
-const LOC_RE = /^[A-Z]-\d{2}-\d{2}$/;
-function normLoc(v) {
-  const s = str(v, 20).toUpperCase();
-  if (s && !LOC_RE.test(s)) fail('ლოკაციის ფორმატი: რიგი-თარო-უჯრა, მაგ. A-01-02');
-  return s;
+// Location codes are free text from the managed list (locations table), compared case-insensitively.
+const locCode = v => str(v, 30).replace(/\s+/g, ' ');
+const findLoc = (wh, code) => get('SELECT * FROM locations WHERE wh_id=? AND code=?', wh, code);
+// Returns the stored spelling of an active location, '' for none; `current` is allowed even if deactivated since.
+function locCheck(wh, v, current = '') {
+  const c = locCode(v);
+  if (!c) return '';
+  const l = findLoc(wh, c);
+  if (!l) fail(`ლოკაცია „${c}“ არ არის სიაში — დაამატეთ „საწყობი და ლოკაციები“ გვერდზე`);
+  if (!l.active && l.code.toLowerCase() !== String(current).toLowerCase()) fail(`ლოკაცია „${l.code}“ გამორთულია`);
+  return l.code;
+}
+// CSV import may name locations that are not in the list yet; they are added.
+function ensureLoc(wh, v) {
+  const c = locCode(v);
+  if (!c) return '';
+  if (!findLoc(wh, c)) run('INSERT INTO locations(wh_id,code) VALUES(?,?)', wh, c);
+  return findLoc(wh, c).code;
+}
+const setLoc = (pid, wh, code) => { ensureStock(pid, wh); run('UPDATE stock SET loc=? WHERE product_id=? AND wh_id=?', code, pid, wh); };
+
+// Serial numbers: typed separated by commas, semicolons or new lines.
+function serialList(v) {
+  const raw = Array.isArray(v) ? v : String(v ?? '').split(/[\n,;]+/);
+  const out = [];
+  raw.map(s => str(s, 60)).filter(Boolean).forEach(s => { if (!out.some(x => x.toLowerCase() === s.toLowerCase())) out.push(s); });
+  return out;
+}
+const lineSerials = l => ({ all: JSON.parse(l.serials || '[]'), back: JSON.parse(l.ret_serials || '[]') });
+const isBack = (back, s) => back.some(x => x.toLowerCase() === s.toLowerCase());
+// A serial may be on only one vehicle at a time: issued and not returned.
+function serialFree(pid, serials, exceptLine = 0) {
+  if (!serials.length) return;
+  for (const l of all("SELECT p.*, o.id AS so FROM so_parts p JOIN service_orders o ON o.id=p.so_id WHERE p.product_id=? AND p.serials<>'[]' AND p.id<>?", pid, exceptLine)) {
+    const { all: sn, back } = lineSerials(l);
+    const clash = serials.find(s => sn.some(x => x.toLowerCase() === s.toLowerCase()) && !isBack(back, s));
+    if (clash) fail(`სერიული № ${clash} უკვე გაცემულია (${l.so}) და არ დაბრუნებულა`);
+  }
 }
 const isDate = d => /^\d{4}-\d{2}-\d{2}$/.test(String(d || ''));
 function whOk(w) {
@@ -153,9 +192,10 @@ function getState() {
   const svcs = groupBy(all('SELECT * FROM so_services ORDER BY id'), 'so_id');
   st.sos = all('SELECT * FROM service_orders ORDER BY date DESC, id DESC').map(o => ({
     id: o.id, date: o.date, vid: o.vehicle_id, resp: o.resp, km: o.km, status: o.status, closedAt: o.closed_at, lastChange: o.last_change,
-    parts: (parts.get(o.id) || []).map(l => ({ lid: l.id, pid: l.product_id, wh: l.wh_id, qty: l.qty, ret: l.ret, price: l.price })),
+    parts: (parts.get(o.id) || []).map(l => { const { all: sn, back } = lineSerials(l); return { lid: l.id, pid: l.product_id, wh: l.wh_id, qty: l.qty, ret: l.ret, price: l.price, serials: sn, retSerials: back }; }),
     svcs: (svcs.get(o.id) || []).map(x => ({ sid: x.id, name: x.name, price: x.price }))
   }));
+  st.locations = all('SELECT wh_id AS wh, code, note, active FROM locations').map(r => ({ ...r, active: !!r.active }));
   st.catalog = all('SELECT model, product_id AS pid FROM catalog').map(r => ({ ...r }));
   st.moves = all('SELECT date,type,ref,product_id AS pid,qty,wh_id AS wh,to_wh AS "to",note FROM moves ORDER BY id DESC LIMIT 500').map(r => ({ ...r }));
   st.transfers = all('SELECT id,date,product_id AS pid,from_wh AS "from",to_wh AS "to",qty FROM transfers ORDER BY rowid DESC LIMIT 50').map(r => ({ ...r }));
@@ -180,7 +220,6 @@ function importCheck(type, rows) {
       if (!name) e.push('დასახელება ცარიელია');
       if (uom && !get('SELECT 1 FROM uoms WHERE name=?', uom)) e.push(`უცნობი ერთეული „${uom}“`);
       if (![min, cost, qty].every(v => okNum(v))) e.push('რიცხვი არასწორია');
-      if (loc && !LOC_RE.test(loc.toUpperCase())) e.push('ლოკაციის ფორმატი: A-01-02');
       if (art && seen.has(art.toUpperCase())) e.push('არტიკული მეორდება ფაილში');
       seen.add(art.toUpperCase());
       if (art && get('SELECT 1 FROM products WHERE art=?', art)) st = 'upd';
@@ -200,12 +239,15 @@ function importCheck(type, rows) {
       if (!get('SELECT 1 FROM products WHERE art=?', art)) e.push('პროდუქტი ვერ მოიძებნა');
       if (qty === '' || !okNum(qty)) e.push('რაოდენობა არასწორია');
       if (!okNum(cost)) e.push('ღირებულება არასწორია');
-      if (loc && !LOC_RE.test(loc.toUpperCase())) e.push('ლოკაციის ფორმატი: A-01-02');
       const w = wh === '' ? 1 : +wh;
       if (w !== 1 && w !== 2) e.push('საწყობი: 1 ან 2');
       else if (w === 2 && setting('wh2') !== '1') e.push('მეორე საწყობი გამორთულია');
     } else fail('უცნობი იმპორტის ტიპი');
-    return { c, st: e.length ? 'err' : st, msg: e.join('; ') };
+    // Unknown locations are created on import; say so in the preview.
+    const loc = type === 'products' ? c[6] : type === 'stock' ? c[3] : '';
+    const lw = type === 'stock' && c[4] === '2' ? 2 : 1;
+    const info = !e.length && locCode(loc) && !findLoc(lw, locCode(loc)) ? 'ახალი ლოკაცია: ' + locCode(loc) : '';
+    return { c, st: e.length ? 'err' : st, msg: e.length ? e.join('; ') : info };
   });
 }
 
@@ -244,12 +286,6 @@ const commands = {
         const n = str(value, 80);
         if (!n) fail('შეიყვანეთ საწყობის დასახელება');
         run('UPDATE warehouses SET name=? WHERE id=?', n, key === 'wh1Name' ? 1 : 2); break;
-      }
-      case 'rackName': {
-        const r = JSON.parse(setting('racks') || '{}'), row = str(value?.row, 1).toUpperCase();
-        if (!/^[A-Z]$/.test(row)) fail('რიგი უნდა იყოს ერთი ლათინური ასო');
-        if (str(value?.name)) r[row] = str(value.name, 60); else delete r[row];
-        setSetting('racks', JSON.stringify(r)); break;
       }
       default: fail('უცნობი პარამეტრი');
     }
@@ -293,7 +329,8 @@ const commands = {
     for (const [w, l] of Object.entries(locs || {})) {
       if (+w !== 1 && +w !== 2) continue;
       ensureStock(pid, +w);
-      run('UPDATE stock SET loc=? WHERE product_id=? AND wh_id=?', normLoc(l), pid, +w);
+      const cur = get('SELECT loc FROM stock WHERE product_id=? AND wh_id=?', pid, +w).loc;
+      setLoc(pid, +w, locCheck(+w, l, cur));
     }
     return pid;
   },
@@ -357,23 +394,38 @@ const commands = {
     }
     touch(id);
   },
-  'so.issue'({ id, pid, wh, qty }) {
+  // Serial numbers are optional for every product: at most one per issued unit.
+  'so.issue'({ id, pid, wh, qty, serials }) {
     openSO(id);
-    const p = product(pid), w = whOk(wh || 1), q = num(qty);
+    const p = product(pid), w = whOk(wh || 1), q = num(qty), sn = serialList(serials);
     if (!(q > 0)) fail('რაოდენობა უნდა იყოს 0-ზე მეტი');
+    if (sn.length > q) fail(`სერიული ნომერი (${sn.length}) მეტია რაოდენობაზე (${q})`);
+    serialFree(p.id, sn);
     addStock(p.id, w, -q);
-    run('INSERT INTO so_parts(so_id,product_id,wh_id,qty,ret,price) VALUES(?,?,?,?,0,?)', id, p.id, w, q, p.avg_cost);
-    move('out', id, p.id, q, w);
+    run('INSERT INTO so_parts(so_id,product_id,wh_id,qty,ret,price,serials) VALUES(?,?,?,?,0,?,?)', id, p.id, w, q, p.avg_cost, JSON.stringify(sn));
+    move('out', id, p.id, q, w, null, sn.length ? 'S/N: ' + sn.join(', ') : null);
     touch(id);
   },
-  'so.return'({ id, lid, qty, reason }) {
+  'so.setSerials'({ id, lid, serials }) {
     openSO(id);
     const l = get('SELECT * FROM so_parts WHERE id=? AND so_id=?', lid, id) || fail('ხაზი ვერ მოიძებნა');
-    const q = num(qty), net = r4(l.qty - l.ret);
+    const sn = serialList(serials), { back } = lineSerials(l);
+    if (sn.length > l.qty) fail(`სერიული ნომერი (${sn.length}) მეტია გაცემულ რაოდენობაზე (${l.qty})`);
+    serialFree(l.product_id, sn.filter(s => !isBack(back, s)), lid);
+    run('UPDATE so_parts SET serials=?, ret_serials=? WHERE id=?', JSON.stringify(sn), JSON.stringify(back.filter(s => isBack(sn, s))), lid);
+    touch(id);
+  },
+  'so.return'({ id, lid, qty, reason, serials }) {
+    openSO(id);
+    const l = get('SELECT * FROM so_parts WHERE id=? AND so_id=?', lid, id) || fail('ხაზი ვერ მოიძებნა');
+    const q = num(qty), net = r4(l.qty - l.ret), { all: sn, back } = lineSerials(l), rs = serialList(serials);
     if (!(q > 0) || q > net) fail(`დასაბრუნებელი რაოდენობა: 0-დან ${net}-მდე`);
-    run('UPDATE so_parts SET ret=? WHERE id=?', r4(l.ret + q), lid);
+    const bad = rs.find(s => !sn.some(x => x.toLowerCase() === s.toLowerCase()) || isBack(back, s));
+    if (bad) fail(`სერიული № ${bad} ამ ხაზზე გაცემული არ არის`);
+    if (rs.length > q) fail('მონიშნული სერიული ნომრები მეტია დასაბრუნებელ რაოდენობაზე');
+    run('UPDATE so_parts SET ret=?, ret_serials=? WHERE id=?', r4(l.ret + q), JSON.stringify([...back, ...rs]), lid);
     addStock(l.product_id, l.wh_id, q);
-    move('ret', id, l.product_id, q, l.wh_id, null, str(reason, 100) || null);
+    move('ret', id, l.product_id, q, l.wh_id, null, [str(reason, 100), rs.length ? 'S/N: ' + rs.join(', ') : ''].filter(Boolean).join(' · ') || null);
     touch(id);
   },
   'so.addService'({ id, name, price }) {
@@ -400,11 +452,13 @@ const commands = {
   },
   'transfer.create'({ pid, from, qty, loc }) {
     if (setting('wh2') !== '1') fail('ჯერ ჩართეთ მეორე საწყობი პარამეტრებში');
-    const p = product(pid), f = whOk(from), t = f === 1 ? 2 : 1, q = num(qty), l = normLoc(loc);
+    const p = product(pid), f = whOk(from), t = f === 1 ? 2 : 1, q = num(qty);
     if (!(q > 0)) fail('რაოდენობა უნდა იყოს 0-ზე მეტი');
+    ensureStock(p.id, t);
+    const l = locCheck(t, loc, get('SELECT loc FROM stock WHERE product_id=? AND wh_id=?', p.id, t).loc);
     addStock(p.id, f, -q);
     addStock(p.id, t, q);
-    if (l) run('UPDATE stock SET loc=? WHERE product_id=? AND wh_id=?', l, p.id, t);
+    if (l) setLoc(p.id, t, l);
     const id = nextNo('transfers', `TR-${today().slice(0, 4)}-`);
     run('INSERT INTO transfers VALUES(?,?,?,?,?,?)', id, today(), p.id, f, t, q);
     move('tr', id, p.id, q, f, t);
@@ -412,11 +466,45 @@ const commands = {
   },
   'location.assign'({ pid, wh, loc }) {
     product(pid);
-    const w = +wh, l = normLoc(loc);
+    const w = +wh;
     if (w !== 1 && w !== 2) fail('უცნობი საწყობი');
+    const l = locCheck(w, loc);
     if (!l) fail('მიუთითეთ ლოკაცია');
-    ensureStock(pid, w);
-    run('UPDATE stock SET loc=? WHERE product_id=? AND wh_id=?', l, pid, w);
+    setLoc(pid, w, l);
+  },
+  // Adds a location, or renames one (oldCode); a rename moves its products along.
+  'location.save'({ wh, code, oldCode, note, active }) {
+    const w = +wh, c = locCode(code);
+    if (w !== 1 && w !== 2) fail('უცნობი საწყობი');
+    if (!c) fail('შეიყვანეთ ლოკაციის კოდი');
+    if (c.includes(' · ')) fail('კოდი არ უნდა შეიცავდეს „ · “-ს');
+    const dup = findLoc(w, c);
+    if (oldCode) {
+      const old = findLoc(w, locCode(oldCode)) || fail('ლოკაცია ვერ მოიძებნა');
+      if (dup && dup.code.toLowerCase() !== old.code.toLowerCase()) fail(`ლოკაცია „${dup.code}“ უკვე არსებობს`);
+      run('UPDATE locations SET code=?, note=?, active=? WHERE wh_id=? AND code=?', c, str(note, 120), active === false ? 0 : 1, w, old.code);
+      run('UPDATE stock SET loc=? WHERE wh_id=? AND loc=?', c, w, old.code);
+    } else {
+      if (dup) fail(`ლოკაცია „${dup.code}“ უკვე არსებობს`);
+      run('INSERT INTO locations(wh_id,code,note,active) VALUES(?,?,?,?)', w, c, str(note, 120), active === false ? 0 : 1);
+    }
+    return c;
+  },
+  'location.bulkAdd'({ wh, codes }) {
+    const w = +wh;
+    if (w !== 1 && w !== 2) fail('უცნობი საწყობი');
+    const list = String(codes || '').split(/\r?\n/).map(locCode).filter(Boolean);
+    if (!list.length) fail('ჩაწერეთ კოდები — თითო სტრიქონზე ერთი');
+    if (list.some(c => c.includes(' · '))) fail('კოდი არ უნდა შეიცავდეს „ · “-ს');
+    let n = 0;
+    list.forEach(c => { if (!findLoc(w, c)) { run('INSERT INTO locations(wh_id,code) VALUES(?,?)', w, c); n++; } });
+    return n;
+  },
+  'location.delete'({ wh, code }) {
+    const l = findLoc(+wh, locCode(code)) || fail('ლოკაცია ვერ მოიძებნა');
+    const n = get('SELECT COUNT(*) AS n FROM stock WHERE wh_id=? AND loc=?', +wh, l.code).n;
+    if (n) fail(`ლოკაციაზე ${n} პროდუქტია — წაშლამდე გადაიტანეთ სხვა ლოკაციაზე`);
+    run('DELETE FROM locations WHERE wh_id=? AND code=?', +wh, l.code);
   },
   'catalog.toggle'({ model, pid }) {
     product(pid);
@@ -443,10 +531,10 @@ const commands = {
         const p = get('SELECT * FROM products WHERE art=?', art);
         if (p) {
           run('UPDATE products SET name=?,uom=?,min_qty=? WHERE id=?', name, uom || p.uom, min === '' ? p.min_qty : num(min), p.id);
-          if (loc) commands['location.assign']({ pid: p.id, wh: 1, loc });
+          if (loc) setLoc(p.id, 1, ensureLoc(1, loc));
           u++;
         } else {
-          const pid = commands['product.save']({ art, name, uom: uom || 'ცალი', min, cost, locs: { 1: loc } });
+          const pid = commands['product.save']({ art, name, uom: uom || 'ცალი', min, cost, locs: { 1: ensureLoc(1, loc) } });
           if (num(qty) > 0) { addStock(pid, 1, num(qty)); move('imp', 'იმპორტი', pid, num(qty), 1, null, 'CSV'); }
           n++;
         }
@@ -460,7 +548,7 @@ const commands = {
         const p = get('SELECT * FROM products WHERE art=?', art), w = wh === '' ? 1 : +wh, q = num(qty);
         addStock(p.id, w, r4(q - stockQty(p.id, w)));
         if (cost !== '') run('UPDATE products SET avg_cost=? WHERE id=?', num(cost), p.id);
-        if (loc) commands['location.assign']({ pid: p.id, wh: w, loc });
+        if (loc) setLoc(p.id, w, ensureLoc(w, loc));
         move('imp', 'იმპორტი', p.id, q, w, null, 'საწყისი ნაშთი');
         u++;
       }
