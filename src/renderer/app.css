@@ -274,3 +274,8 @@ body.setup .main{grid-template-columns:1fr} body.setup nav.side,body.setup .tool
 /* catalog: keep the product column visible while scrolling across models */
 .matrix th:first-child,.matrix td:first-child{position:sticky;left:0;background:#fff;z-index:1;min-width:260px;box-shadow:1px 0 0 var(--line2)}
 .matrix thead th:first-child{background:#fafbfc;z-index:2}
+/* search boxes: room for the magnifier icon (the general input rule above would otherwise reset the padding) */
+.gsearch input,.gsearch input:not([type]){padding-left:36px}
+.gsearch>svg{top:50%;transform:translateY(-50%);pointer-events:none;z-index:1}
+.gsr{top:calc(100% + 4px)}
+.badge.nodot::before{display:none}

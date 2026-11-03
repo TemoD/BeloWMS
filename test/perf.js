@@ -43,6 +43,8 @@ module.exports = function perf(win, { app }) {
       await page('reports-stock', `repTab='stock';render()`);
       await page('reports-moves', `repTab='moves';render()`);
       await page('settings', `go('settings')`);
+      await page('settings-rules', `[...document.querySelectorAll('h3')].find(h=>h.textContent.includes('აღრიცხვის წესები')).scrollIntoView()`);
+      res['catalogRec switch'] = await js(`await call('settings.set',{key:'catalogRec',value:false});go('so',S.sos.find(o=>o.status==='open').id);const hidden=!document.body.innerText.includes('რეკომენდაცია კატალოგიდან');await call('settings.set',{key:'catalogRec',value:true});render();return {hiddenWhenOff:hidden,shownWhenOn:document.body.innerText.includes('რეკომენდაცია კატალოგიდან')}`);
       res['global-search-keystroke'] = await js(`$('#gs').value='SN000';const t=performance.now();gSearch();return +(performance.now()-t).toFixed(1)`);
       await js(`$('#gsr').hidden=true;$('#gs').value=''`);
       // A full command round trip: IPC, database, new state, re-render.

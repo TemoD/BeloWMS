@@ -204,7 +204,7 @@ function getState({ delta = false } = {}) {
     today: today(),
     settings: {
       wh2: s.wh2 === '1', autoClose: +s.autoClose || 7, backupDir: s.backupDir || '', backupSchedule: s.backupSchedule || 'close',
-      lastBackup: s.lastBackup || '', setupDone: s.setupDone === '1', company: JSON.parse(s.company || '{}'), racks: JSON.parse(s.racks || '{}')
+      lastBackup: s.lastBackup || '', setupDone: s.setupDone === '1', catalogRec: s.catalogRec !== '0', company: JSON.parse(s.company || '{}'), racks: JSON.parse(s.racks || '{}')
     },
     wh: Object.fromEntries(all('SELECT id,name FROM warehouses').map(r => [r.id, r.name])),
     uoms: all('SELECT name FROM uoms ORDER BY sort,name').map(r => r.name),
@@ -307,6 +307,8 @@ const commands = {
         if (!(n >= 1 && n <= 365)) fail('ვადა უნდა იყოს 1–365 დღე');
         setSetting('autoClose', n); return autoClose();
       }
+      case 'catalogRec':
+        setSetting('catalogRec', value ? '1' : '0'); break;
       case 'backupSchedule':
         if (!['close', 'manual'].includes(value)) fail('უცნობი განრიგი');
         setSetting(key, value); break;

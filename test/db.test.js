@@ -192,3 +192,13 @@ test('after a command only changed service orders are sent, and they match a ful
   DB.close(); DB.open(':memory:');
   assert.equal(full.sos.every(o => o.status === 'auto'), true);
 });
+
+test('catalog recommendation can be switched off and on; negative stock stays forbidden', () => {
+  fresh();
+  assert.equal(DB.getState().settings.catalogRec, true);
+  DB.exec('settings.set', { key: 'catalogRec', value: false });
+  assert.equal(DB.getState().settings.catalogRec, false);
+  DB.exec('settings.set', { key: 'catalogRec', value: true });
+  assert.equal(DB.getState().settings.catalogRec, true);
+  assert.throws(() => DB.exec('settings.set', { key: 'negativeStock', value: true }), /უცნობი პარამეტრი/);
+});

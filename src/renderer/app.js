@@ -385,10 +385,10 @@ VIEWS.so = id => {
     </div>
    </div>
    <div>
-    <div class="card"><header><h3>${ic('spark')} რეკომენდაცია კატალოგიდან</h3></header>
+    ${S.settings.catalogRec ? `<div class="card"><header><h3>${ic('spark')} რეკომენდაცია კატალოგიდან</h3></header>
      <div class="body" style="padding-bottom:4px"><div class="sub" style="margin-bottom:8px">მოდელისთვის <b style="color:var(--ink)">${esc(m)}</b>. რეკომენდაციაა და არა შეზღუდვა — შეგიძლიათ ნებისმიერი პროდუქტის გაცემა.</div></div>
      ${recs.map(r => { const p = P(r.pid); return `<div class="rec"><div class="n"><div>${esc(p.name)}</div><div class="sub"><span class="mono">${esc(p.art)}</span> · ნაშთი ${qfmt(totQ(p))} ${esc(p.uom)} · ${ic('pin')} ${esc(p.stock[1].loc || '—')}</div><div style="margin-top:3px">${r.manual ? '<span class="tag man">კატალოგი</span> ' : ''}${r.hist ? `<span class="tag hist">ისტორია · ${r.hist}×</span>` : ''}</div></div>${inOrder.has(p.id) ? '<span class="badge b-ok">დამატებულია</span>' : closed ? '' : btn('გაცემა', `addPart('${o.id}','${p.id}')`, 'sm', 'plus')}</div>`; }).join('') || '<div class="empty">ამ მოდელზე კატალოგი ჯერ ცარიელია. გაცემული ნაწილები ავტომატურად შეივსება.</div>'}
-    </div>
+    </div>` : ''}
     <div class="card"><header><h3>ჯამი</h3></header><div class="totals">
       <div><span>ნაწილები</span><span>${money(partsCost(o))}</span></div>
       <div><span>მომსახურება</span><span>${money(svcCost(o))}</span></div>
@@ -401,7 +401,7 @@ function soWarn(oid) {
   if (!p) { w.innerHTML = ''; return; }
   const wh = +($('#sowh')?.value || 1), q = +$('#soqty').value || 0, avail = p.stock[wh].q;
   let h = '';
-  if (!inCatalog(m, p.id)) h += `<div class="note warn" style="margin:10px 0">${ic('info')}<div><b>${esc(p.name)}</b> კატალოგში არ არის მიბმული მოდელზე ${esc(m)}. გაცემა მაინც შესაძლებელია — კავშირი ისტორიიდან აისახება კატალოგში.</div></div>`;
+  if (S.settings.catalogRec && !inCatalog(m, p.id)) h += `<div class="note warn" style="margin:10px 0">${ic('info')}<div><b>${esc(p.name)}</b> კატალოგში არ არის მიბმული მოდელზე ${esc(m)}. გაცემა მაინც შესაძლებელია — კავშირი ისტორიიდან აისახება კატალოგში.</div></div>`;
   if (q > avail) h += `<div class="note" style="margin:10px 0;background:var(--bad-bg);color:var(--bad)">${ic('alert')}<div>ნაშთი არასაკმარისია: ხელმისაწვდომია ${qfmt(avail)} ${esc(p.uom)}. უარყოფითი ნაშთი დაუშვებელია.</div></div>`;
   h += `<div class="sub" style="margin:${h ? '0' : '10px'} 0 12px">ნაშთი: <b>${qfmt(avail)} ${esc(p.uom)}</b> · ლოკაცია ${esc(p.stock[wh].loc || '—')} · საშ. ფასი ${money(p.cost)}</div>`;
   w.innerHTML = h;
@@ -788,7 +788,6 @@ function exportReport() {
 
 /* ================= settings ================= */
 const setRow = (t, s, right) => `<div class="setrow"><div class="grow"><div class="t1">${t}</div><div class="sub">${s}</div></div>${right}</div>`;
-const lockSw = on => `<label class="switch" title="ფიქსირებული წესი"><input type="checkbox" ${on ? 'checked' : ''} disabled><span></span></label>`;
 VIEWS.settings = () => {
   const lb = lastBackup(), dir = S.settings.backupDir;
   compLogo = S.settings.company.logo || '';
@@ -803,9 +802,9 @@ VIEWS.settings = () => {
    </div>
    <div class="card"><header><h3>აღრიცხვის წესები</h3></header>
     ${setRow('სერვის ორდერის ავტომატური დახურვა', 'ღია ორდერი იხურება <b>ბოლო ცვლილებიდან</b> N დღეში (გაცემა, დაბრუნება, მომსახურება, ველის შეცვლა, ხელახლა გახსნა)', `<input type="number" class="w80" min="1" max="365" value="${S.settings.autoClose}" onchange="call('settings.set',{key:'autoClose',value:this.value},n=>'ვადა შენახულია'+(n?' · '+n+' ორდერი დაიხურა':''))"><span class="sub">დღე</span>`)}
-    ${setRow('უარყოფითი ნაშთი', 'აკრძალულია — გაცემა და გადაადგილება ნაშთზე მეტი რაოდენობით შეუძლებელია', lockSw(false))}
-    ${setRow('ღირებულების მეთოდი', 'საშუალო შეწონილი — ხელახლა ითვლება ყოველი შესყიდვისას', '<span class="badge b-open">საშუალო</span>')}
-    ${setRow('კატალოგის რეკომენდაცია', 'რეკომენდაცია, არა შეზღუდვა', lockSw(true))}
+    ${setRow('უარყოფითი ნაშთი', 'გაცემა და გადაადგილება ნაშთზე მეტი რაოდენობით შეუძლებელია. ფიქსირებული წესია — არ იცვლება.', `<span class="badge b-low nodot" style="gap:6px">${ic('lock')}ყოველთვის აკრძალულია</span>`)}
+    ${setRow('ღირებულების მეთოდი', 'საშუალო შეწონილი — ხელახლა ითვლება ყოველი შესყიდვისას. ფიქსირებული წესია.', `<span class="badge b-open nodot" style="gap:6px">${ic('lock')}საშუალო</span>`)}
+    ${setRow('კატალოგის რეკომენდაცია', 'სერვის ორდერში ჩანს მოდელზე მორგებული ნაწილები და გაფრთხილება კატალოგის გარეშე პროდუქტზე. მხოლოდ რეკომენდაციაა — გაცემას არასდროს ზღუდავს.', `<label class="switch"><input type="checkbox" ${S.settings.catalogRec ? 'checked' : ''} onchange="call('settings.set',{key:'catalogRec',value:this.checked},this.checked?'რეკომენდაცია ჩაირთო':'რეკომენდაცია გამოირთო').then(r=>{if(!r)render()})"><span></span></label>`)}
    </div>
    <div class="card"><header><h3>ზომის ერთეულები</h3></header><div class="body"><div class="chips" style="margin-bottom:10px">${S.uoms.map(u => `<span class="chip">${esc(u)}</span>`).join('')}</div>
     <div style="display:flex;gap:8px"><input id="nu" placeholder="ახალი ერთეული"><button class="btn" onclick="call('uom.add',{name:$('#nu').value},'ერთეული დაემატა')">${ic('plus')}დამატება</button></div></div></div>
@@ -932,6 +931,11 @@ async function doImport() {
 }
 
 /* ================= service order PDF ================= */
+// Lines in picking order: by warehouse, then location (natural order), lines without a location last.
+const pickOrder = parts => parts.slice().sort((a, b) => {
+  const la = P(a.pid).stock[a.wh].loc, lb = P(b.pid).stock[b.wh].loc;
+  return a.wh - b.wh || (!la - !lb) || natural(la || '', lb || '');
+});
 let pvSO = null;
 function printSO(id) {
   const o = SO(id), v = V(o.vid), c = S.settings.company, st = { open: 'ღია', closed: 'დახურული', auto: 'ავტო-დახურული' }[o.status];
@@ -941,9 +945,9 @@ function printSO(id) {
    <table class="kv"><tr><th>სახელმწიფო ნომერი</th><td>${esc(v.plate)}</td><th>VIN კოდი</th><td class="mono">${esc(v.vin)}</td></tr>
     <tr><th>მარკა / მოდელი</th><td>${esc(modelKey(v))}${v.year ? ', ' + esc(v.year) : ''}</td><th>გარბენი</th><td>${qfmt(o.km)} კმ</td></tr>
     <tr><th>პასუხისმგებელი პირი</th><td colspan="3"><b>${esc(o.resp)}</b></td></tr></table>
-   <h3>გაცემული ნაწილები</h3><table><thead><tr><th>#</th><th>არტიკული</th><th>დასახელება</th><th>გაცემ.</th><th>დაბრ.</th><th>ერთ.</th><th>ფასი</th><th>ჯამი</th></tr></thead><tbody>
-   ${o.parts.map((l, i) => { const p = P(l.pid); return `<tr><td>${i + 1}</td><td class="mono">${esc(p.art)}</td><td>${esc(p.name)}${l.serials.length ? `<div style="font-size:10px;margin-top:2px">S/N: ${l.serials.map(s => l.retSerials.some(x => sameCode(x, s)) ? esc(s) + ' (დაბრ.)' : esc(s)).join(', ')}</div>` : ''}</td><td class="num">${qfmt(l.qty)}</td><td class="num">${l.ret ? qfmt(l.ret) : ''}</td><td>${esc(p.uom)}</td><td class="num">${money(l.price)}</td><td class="num">${money((l.qty - l.ret) * l.price)}</td></tr>`; }).join('') || '<tr><td colspan="8">—</td></tr>'}
-   </tbody><tfoot><tr><td colspan="7">ნაწილები სულ</td><td class="num">${money(partsCost(o))}</td></tr></tfoot></table>
+   <h3>გაცემული ნაწილები <span style="font-weight:400;font-size:10px">· დალაგებულია ლოკაციის მიხედვით (აღებისთვის)</span></h3><table><thead><tr><th>#</th><th>ლოკაცია</th><th>არტიკული</th><th>დასახელება</th><th>გაცემ.</th><th>დაბრ.</th><th>ერთ.</th><th>ფასი</th><th>ჯამი</th></tr></thead><tbody>
+   ${pickOrder(o.parts).map((l, i) => { const p = P(l.pid), loc = p.stock[l.wh].loc; return `<tr><td>${i + 1}</td><td class="mono" style="white-space:nowrap"><b>${esc(loc || '—')}</b>${S.settings.wh2 ? `<div style="font-size:10px">${esc(S.wh[l.wh])}</div>` : ''}</td><td class="mono">${esc(p.art)}</td><td>${esc(p.name)}${l.serials.length ? `<div style="font-size:10px;margin-top:2px">S/N: ${l.serials.map(s => l.retSerials.some(x => sameCode(x, s)) ? esc(s) + ' (დაბრ.)' : esc(s)).join(', ')}</div>` : ''}</td><td class="num">${qfmt(l.qty)}</td><td class="num">${l.ret ? qfmt(l.ret) : ''}</td><td>${esc(p.uom)}</td><td class="num">${money(l.price)}</td><td class="num">${money((l.qty - l.ret) * l.price)}</td></tr>`; }).join('') || '<tr><td colspan="9">—</td></tr>'}
+   </tbody><tfoot><tr><td colspan="8">ნაწილები სულ</td><td class="num">${money(partsCost(o))}</td></tr></tfoot></table>
    <h3>მომსახურება</h3><table><thead><tr><th>#</th><th>დასახელება</th><th>ფასი</th></tr></thead><tbody>${o.svcs.map((s, i) => `<tr><td style="width:24px">${i + 1}</td><td>${esc(s.name)}</td><td class="num" style="width:110px">${s.price != null ? money(s.price) : '—'}</td></tr>`).join('') || '<tr><td colspan="3">—</td></tr>'}</tbody></table>
    <div class="sh-tot">სულ: ${money(soCost(o))}</div>
    <div class="sig"><div>გასცა (მესაწყობე)<br><br>სახელი, გვარი: ______________________<br><br>ხელმოწერა: ______________</div>
