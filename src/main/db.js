@@ -74,7 +74,7 @@ function open(file) {
   MIGRATIONS.slice(v).forEach((sql, i) => tx(() => { db.exec(sql); run("INSERT OR REPLACE INTO meta VALUES('schema',?)", String(v + i + 1)); }));
   return db;
 }
-function close() { if (db) { db.close(); db = null; } }
+function close() { if (db) { db.close(); db = null; } soCache = null; pendingSO.clear(); }
 const handle = () => db;
 
 function setting(k) { return get('SELECT value FROM settings WHERE key=?', k)?.value ?? null; }
@@ -160,12 +160,45 @@ function move(type, ref, pid, qty, wh, to = null, note = null) {
 // Open service orders close automatically N days after their last change.
 function autoClose() {
   const n = +setting('autoClose') || 7;
-  return run(`UPDATE service_orders SET status='auto', closed_at=date(last_change, '+' || ? || ' days')
-    WHERE status='open' AND julianday(?) - julianday(last_change) >= ?`, n, today(), n).changes;
+  const ids = all(`UPDATE service_orders SET status='auto', closed_at=date(last_change, '+' || ? || ' days')
+    WHERE status='open' AND julianday(?) - julianday(last_change) >= ? RETURNING id`, n, today(), n).map(r => r.id);
+  ids.forEach(id => pendingSO.add(id));
+  return ids.length;
 }
 
-function getState() {
+// Service orders are most of the state, so they are cached and only the ones a command touched are rebuilt.
+let soCache = null;            // Map id → service order as the screen sees it
+const pendingSO = new Set();   // ids changed since the last getState
+function soObject(o, parts, svcs) {
+  return {
+    id: o.id, date: o.date, vid: o.vehicle_id, resp: o.resp, km: o.km, status: o.status, closedAt: o.closed_at, lastChange: o.last_change,
+    parts: parts.map(l => {
+      const sn = l.serials === '[]' ? [] : JSON.parse(l.serials), back = l.ret_serials === '[]' ? [] : JSON.parse(l.ret_serials);
+      return { lid: l.id, pid: l.product_id, wh: l.wh_id, qty: l.qty, ret: l.ret, price: l.price, serials: sn, retSerials: back };
+    }),
+    svcs: svcs.map(x => ({ sid: x.id, name: x.name, price: x.price }))
+  };
+}
+function loadAllSOs() {
+  const parts = groupBy(all('SELECT * FROM so_parts ORDER BY id'), 'so_id');
+  const svcs = groupBy(all('SELECT * FROM so_services ORDER BY id'), 'so_id');
+  soCache = new Map(all('SELECT * FROM service_orders').map(o => [o.id, soObject(o, parts.get(o.id) || [], svcs.get(o.id) || [])]));
+}
+function refreshSO(id) {
+  const o = get('SELECT * FROM service_orders WHERE id=?', id);
+  if (!o) { soCache.delete(id); return; }
+  soCache.set(id, soObject(o, all('SELECT * FROM so_parts WHERE so_id=? ORDER BY id', id), all('SELECT * FROM so_services WHERE so_id=? ORDER BY id', id)));
+}
+const soOrder = (a, b) => a.date < b.date ? 1 : a.date > b.date ? -1 : a.id < b.id ? 1 : a.id > b.id ? -1 : 0;
+
+// delta: true returns only the changed service orders (sosUpsert) instead of all of them (sos).
+function getState({ delta = false } = {}) {
   autoClose();
+  const fresh = !soCache;
+  if (fresh) { loadAllSOs(); pendingSO.clear(); }
+  const changed = [...pendingSO];
+  changed.forEach(refreshSO);
+  pendingSO.clear();
   const s = Object.fromEntries(all('SELECT key,value FROM settings').map(r => [r.key, r.value]));
   const st = {
     today: today(),
@@ -188,13 +221,8 @@ function getState() {
     id: o.id, date: o.date, sup: o.supplier_id, wh: o.wh_id, note: o.note,
     lines: (lines.get(o.id) || []).map(l => ({ pid: l.product_id, qty: l.qty, price: l.price }))
   }));
-  const parts = groupBy(all('SELECT * FROM so_parts ORDER BY id'), 'so_id');
-  const svcs = groupBy(all('SELECT * FROM so_services ORDER BY id'), 'so_id');
-  st.sos = all('SELECT * FROM service_orders ORDER BY date DESC, id DESC').map(o => ({
-    id: o.id, date: o.date, vid: o.vehicle_id, resp: o.resp, km: o.km, status: o.status, closedAt: o.closed_at, lastChange: o.last_change,
-    parts: (parts.get(o.id) || []).map(l => { const { all: sn, back } = lineSerials(l); return { lid: l.id, pid: l.product_id, wh: l.wh_id, qty: l.qty, ret: l.ret, price: l.price, serials: sn, retSerials: back }; }),
-    svcs: (svcs.get(o.id) || []).map(x => ({ sid: x.id, name: x.name, price: x.price }))
-  }));
+  if (delta && !fresh) st.sosUpsert = changed.map(id => soCache.get(id)).filter(Boolean);
+  else st.sos = [...soCache.values()].sort(soOrder);
   st.locations = all('SELECT wh_id AS wh, code, note, active FROM locations').map(r => ({ ...r, active: !!r.active }));
   st.catalog = all('SELECT model, product_id AS pid FROM catalog').map(r => ({ ...r }));
   st.moves = all('SELECT date,type,ref,product_id AS pid,qty,wh_id AS wh,to_wh AS "to",note FROM moves ORDER BY id DESC LIMIT 500').map(r => ({ ...r }));
@@ -560,7 +588,9 @@ const commands = {
 function exec(name, args) {
   const f = commands[name];
   if (!f) fail('უცნობი ბრძანება: ' + name);
-  return tx(() => f(args || {}));
+  const result = tx(() => f(args || {}));
+  if (name.startsWith('so.')) pendingSO.add(name === 'so.create' ? result : args.id);
+  return result;
 }
 
 module.exports = { open, close, handle, exec, getState, setting, setSetting, today, nowTs, UserError, IMPORT_COLS,

@@ -53,7 +53,19 @@ const btn = (label, on, cls = '', icon = '', dis = false, id = '') => `<button c
 const plate = p => `<span class="plate"><i>GE</i><span>${esc(p)}</span></span>`;
 
 /* ================= talking to the database ================= */
-function apply(st) { S = st; TODAY = st.today; }
+// A full state carries `sos`; after a command only the changed service orders arrive in `sosUpsert` and are merged here.
+function apply(st) {
+  if (!st.sos) {
+    const up = new Map((st.sosUpsert || []).map(o => [o.id, o]));
+    const prev = S ? S.sos : [];
+    const known = new Set(prev.map(o => o.id));
+    const merged = up.size ? prev.map(o => up.get(o.id) || o) : prev;
+    const added = [...up.values()].filter(o => !known.has(o.id));
+    st.sos = added.length ? [...added, ...merged].sort((a, b) => a.date < b.date ? 1 : a.date > b.date ? -1 : a.id < b.id ? 1 : a.id > b.id ? -1 : 0) : merged;
+  }
+  delete st.sosUpsert;
+  S = st; TODAY = st.today;
+}
 // Runs a command; on success the page re-renders with the new state and the command's result is returned.
 async function call(name, args, okMsg) {
   const r = await window.api.invoke('cmd', name, args);
@@ -64,10 +76,19 @@ async function call(name, args, okMsg) {
 }
 
 /* ================= model helpers ================= */
-const P = id => S.products.find(p => p.id === id);
-const V = id => S.vehicles.find(v => v.id === id);
-const SO = id => S.sos.find(o => o.id === id);
-const SUP = id => S.suppliers.find(s => s.id === id) || { name: '—' };
+// Lookups by id and the catalog are indexed once per state (S is replaced, never mutated, after each command).
+let _ix = null, _ixFor = null;
+function ix() {
+  if (_ixFor === S) return _ix;
+  const byId = list => new Map(list.map(x => [x.id, x]));
+  _ix = { p: byId(S.products), v: byId(S.vehicles), so: byId(S.sos), sup: byId(S.suppliers), cat: null, at: null };
+  _ixFor = S;
+  return _ix;
+}
+const P = id => ix().p.get(id);
+const V = id => ix().v.get(id);
+const SO = id => ix().so.get(id);
+const SUP = id => ix().sup.get(id) || { name: '—' };
 const whs = () => S.settings.wh2 ? [1, 2] : [1];
 const totQ = p => whs().reduce((a, w) => a + p.stock[w].q, 0);
 const isLow = p => p.min > 0 && totQ(p) < p.min;
@@ -80,17 +101,37 @@ const autoBase = o => o.lastChange || o.date;
 const daysLeft = o => S.settings.autoClose - daysBetween(autoBase(o), TODAY);
 const refAct = r => r.startsWith('SO') ? `go('so','${r}')` : r.startsWith('PO') ? `viewPO('${r}')` : '';
 const lastBackup = () => { try { return JSON.parse(S.settings.lastBackup); } catch { return null; } };
-function catEntries(model, excludeSO) {
-  const m = {};
-  S.catalog.filter(c => c.model === model).forEach(c => { m[c.pid] = { pid: c.pid, manual: true, hist: 0 }; });
+// model → Map(pid → {pid, manual, hist}); hist = number of service orders that still have the part on that model.
+function catIndex() {
+  const x = ix();
+  if (x.cat) return x.cat;
+  const idx = new Map();
+  const entry = (m, pid) => { let mm = idx.get(m); if (!mm) idx.set(m, mm = new Map()); let e = mm.get(pid); if (!e) mm.set(pid, e = { pid, manual: false, hist: 0 }); return e; };
+  S.catalog.forEach(c => { entry(c.model, c.pid).manual = true; });
   S.sos.forEach(o => {
     const v = V(o.vid);
-    if (o.id === excludeSO || !v || modelKey(v) !== model) return;
-    new Set(o.parts.filter(l => l.qty - l.ret > 0).map(l => l.pid)).forEach(pid => { m[pid] = m[pid] || { pid, manual: false, hist: 0 }; m[pid].hist++; });
+    if (v) new Set(o.parts.filter(l => l.qty - l.ret > 0).map(l => l.pid)).forEach(pid => { entry(modelKey(v), pid).hist++; });
   });
-  return Object.values(m).filter(e => P(e.pid)).sort((a, b) => (b.manual - a.manual) || (b.hist - a.hist));
+  return (x.cat = idx);
 }
-const inCatalog = (model, pid) => catEntries(model).some(e => e.pid === pid);
+const usedPids = o => new Set(o.parts.filter(l => l.qty - l.ret > 0).map(l => l.pid));
+function catEntries(model, excludeSO) {
+  const mm = catIndex().get(model);
+  if (!mm) return [];
+  const own = excludeSO && SO(excludeSO) ? usedPids(SO(excludeSO)) : null;
+  return [...mm.values()].map(e => own && own.has(e.pid) ? { ...e, hist: e.hist - 1 } : e)
+    .filter(e => (e.manual || e.hist > 0) && P(e.pid)).sort((a, b) => (b.manual - a.manual) || (b.hist - a.hist));
+}
+const catEntry = (model, pid) => { const e = catIndex().get(model)?.get(pid); return e && (e.manual || e.hist > 0) ? e : null; };
+const inCatalog = (model, pid) => !!catEntry(model, pid);
+
+// Long lists show the first rows and a "show more" button; search still covers everything.
+const PAGE = 200;
+let LIM = {};
+function limited(key, list) {
+  const n = LIM[key] || PAGE;
+  return { rows: list.slice(0, n), more: list.length > n ? `<div style="padding:12px;text-align:center;border-top:1px solid var(--line2)"><button class="btn" onclick="LIM['${key}']=${n + 500};render()">მეტის ჩვენება · ნაჩვენებია ${n} / ${list.length}</button></div>` : '' };
+}
 function findProduct(str) {
   const s = String(str || '').trim();
   if (!s) return null;
@@ -106,7 +147,12 @@ const stockBadge = p => isLow(p) ? '<span class="badge b-low">მცირე �
 const natural = (a, b) => a.localeCompare(b, 'ka', { numeric: true, sensitivity: 'base' });
 const sameCode = (a, b) => String(a || '').toLowerCase() === String(b || '').toLowerCase();
 const locsOf = (wh, activeOnly = false) => S.locations.filter(l => l.wh === +wh && (!activeOnly || l.active)).sort((a, b) => natural(a.code, b.code));
-const productsAt = (wh, code) => S.products.filter(p => sameCode(p.stock[wh].loc, code));
+// Products grouped by warehouse and location (lower-case code), built once per state.
+function productsAt(wh, code) {
+  const x = ix();
+  if (!x.at) { x.at = new Map(); S.products.forEach(p => [1, 2].forEach(w => { const k = w + '|' + String(p.stock[w].loc || '').toLowerCase(); if (!x.at.has(k)) x.at.set(k, []); x.at.get(k).push(p); })); }
+  return x.at.get(wh + '|' + String(code || '').toLowerCase()) || [];
+}
 // Every serial on a service-order line that is still on the vehicle (issued, not returned).
 const outSerials = l => l.serials.filter(s => !l.retSerials.some(x => sameCode(x, s)));
 function fillDatalists() {
@@ -126,7 +172,7 @@ const NAV = [
 ];
 const PARENT = { so: 'sos', vehicle: 'vehicles' };
 let route = { page: 'dashboard', id: null };
-function go(page, id = null) { route = { page, id }; render(); $('#content').scrollTop = 0; }
+function go(page, id = null) { if (page !== route.page) LIM = {}; route = { page, id }; render(); $('#content').scrollTop = 0; }
 function renderNav() {
   const act = PARENT[route.page] || route.page, openN = S.sos.filter(o => o.status === 'open').length, lowN = S.products.filter(isLow).length;
   const item = ([k, l, i]) => `<button class="nav ${act === k ? 'on' : ''}" onclick="go('${k}')" title="${l}">${ic(i)}<span class="lab">${l}</span>${k === 'sos' && openN ? `<span class="cnt">${openN}</span>` : ''}${k === 'products' && lowN ? `<span class="cnt" style="background:#7a2a24">${lowN}</span>` : ''}</button>`;
@@ -271,10 +317,10 @@ VIEWS.sos = () => {
   const list = S.sos.filter(match(soFilter)).filter(o => { if (!n) return true; const v = V(o.vid); return norm(o.id).includes(n) || norm(v.plate).includes(n) || norm(v.vin).includes(n) || norm(o.resp).includes(n); });
   return ph('სერვის ორდერები', 'ნაწილების გაცემა/დაბრუნება მანქანაზე · ღია ორდერი ავტომატურად იხურება ბოლო ცვლილებიდან ' + S.settings.autoClose + ' დღეში', btn('ახალი სერვის ორდერი', 'newSO()', 'primary', 'plus')) +
     `<div class="filters"><div class="seg">${[['all', 'ყველა'], ['open', 'ღია'], ['closed', 'დახურული']].map(([k, l]) => `<button class="${soFilter === k ? 'on' : ''}" onclick="soFilter='${k}';render()">${l} (${S.sos.filter(match(k)).length})</button>`).join('')}</div>
-   <input id="soq" placeholder="ძებნა: №, სახ. ნომერი, VIN, პასუხისმგებელი" value="${esc(soQ)}" oninput="soQ=this.value;render();refocus('#soq')" style="width:340px"></div>
+   <input id="soq" placeholder="ძებნა: №, სახ. ნომერი, VIN, პასუხისმგებელი" value="${esc(soQ)}" oninput="soQ=this.value;LIM={};render();refocus('#soq')" style="width:340px"></div>
   <div class="card"><div class="tw"><table class="t"><thead><tr><th>№</th><th>თარიღი</th><th>ტექნიკა</th><th>VIN</th><th>პასუხისმგებელი</th><th class="num">ნაწილები</th><th class="num">მომსახურება</th><th class="num">სულ</th><th>სტატუსი</th></tr></thead><tbody>
-  ${list.map(o => { const v = V(o.vid); return `<tr class="click" onclick="go('so','${o.id}')"><td class="mono">${o.id}</td><td>${fmtD(o.date)}</td><td>${plate(v.plate)} <span class="sub">${esc(modelKey(v))}</span></td><td class="mono sub">${esc(v.vin)}</td><td>${esc(o.resp)}</td><td class="num">${money(partsCost(o))}</td><td class="num">${o.svcs.length ? money(svcCost(o)) : '—'}</td><td class="num"><b>${money(soCost(o))}</b></td><td>${statusBadge(o)}${o.status === 'open' ? `<div class="sub">${daysLeft(o) <= 0 ? 'იხურება დღეს' : 'იხურება ' + daysLeft(o) + ' დღეში'}</div>` : ''}</td></tr>`; }).join('') || emptyRow(9, S.sos.length ? 'ორდერი ვერ მოიძებნა' : 'სერვის ორდერი ჯერ არ არის — დააჭირეთ „ახალი სერვის ორდერი“')}
-  </tbody></table></div></div>`;
+  ${limited('sos', list).rows.map(o => { const v = V(o.vid); return `<tr class="click" onclick="go('so','${o.id}')"><td class="mono">${o.id}</td><td>${fmtD(o.date)}</td><td>${plate(v.plate)} <span class="sub">${esc(modelKey(v))}</span></td><td class="mono sub">${esc(v.vin)}</td><td>${esc(o.resp)}</td><td class="num">${money(partsCost(o))}</td><td class="num">${o.svcs.length ? money(svcCost(o)) : '—'}</td><td class="num"><b>${money(soCost(o))}</b></td><td>${statusBadge(o)}${o.status === 'open' ? `<div class="sub">${daysLeft(o) <= 0 ? 'იხურება დღეს' : 'იხურება ' + daysLeft(o) + ' დღეში'}</div>` : ''}</td></tr>`; }).join('') || emptyRow(9, S.sos.length ? 'ორდერი ვერ მოიძებნა' : 'სერვის ორდერი ჯერ არ არის — დააჭირეთ „ახალი სერვის ორდერი“')}
+  </tbody></table></div>${limited('sos', list).more}</div>`;
 };
 let nsVid = null;
 function newSO(vid = null) {
@@ -400,8 +446,8 @@ VIEWS.purchases = () => {
   const tot = o => o.lines.reduce((a, l) => a + l.qty * l.price, 0);
   return ph('შესყიდვის ორდერები', 'შენახვისთანავე პროდუქცია ემატება საწყობის ნაშთს და განახლდება საშუალო ღირებულება', btn('ახალი შესყიდვის ორდერი', 'openPO()', 'primary', 'plus')) +
     `<div class="card"><div class="tw"><table class="t"><thead><tr><th>№</th><th>თარიღი</th><th>მომწოდებელი</th>${S.settings.wh2 ? '<th>საწყობი</th>' : ''}<th class="num">პოზიცია</th><th class="num">ღირებულება</th><th>სტატუსი</th></tr></thead><tbody>
-  ${S.pos.map(o => `<tr class="click" onclick="viewPO('${o.id}')"><td class="mono">${o.id}</td><td>${fmtD(o.date)}</td><td>${esc(SUP(o.sup).name)}</td>${S.settings.wh2 ? `<td>${esc(S.wh[o.wh])}</td>` : ''}<td class="num">${o.lines.length}</td><td class="num"><b>${money(tot(o))}</b></td><td><span class="badge b-ok">მარაგში მიღებულია</span></td></tr>`).join('') || emptyRow(7, 'შესყიდვის ორდერი ჯერ არ არის')}
-  </tbody></table></div></div>`;
+  ${limited('purchases', S.pos).rows.map(o => `<tr class="click" onclick="viewPO('${o.id}')"><td class="mono">${o.id}</td><td>${fmtD(o.date)}</td><td>${esc(SUP(o.sup).name)}</td>${S.settings.wh2 ? `<td>${esc(S.wh[o.wh])}</td>` : ''}<td class="num">${o.lines.length}</td><td class="num"><b>${money(tot(o))}</b></td><td><span class="badge b-ok">მარაგში მიღებულია</span></td></tr>`).join('') || emptyRow(7, 'შესყიდვის ორდერი ჯერ არ არის')}
+  </tbody></table></div>${limited('purchases', S.pos).more}</div>`;
 };
 function openPO(pid) {
   const p = pid ? P(pid) : null;
@@ -469,11 +515,11 @@ VIEWS.products = () => {
   const ql = prQ.toLowerCase(), n = norm(prQ), wh2 = S.settings.wh2;
   const list = S.products.filter(p => (!prQ || p.name.toLowerCase().includes(ql) || norm(p.art).includes(n) || norm(p.id).includes(n) || whs().some(w => norm(p.stock[w].loc).startsWith(n))) && (!prLow || isLow(p)));
   return ph('პროდუქტები', 'პროდუქტის მასტერ დატა: არტიკული, უნიკალური ნომერი, ზომის ერთეული, ნაშთი, ლოკაცია', btn('CSV იმპორტი', "openImport('products')", '', 'upload') + btn('ახალი პროდუქტი', 'openProduct()', 'primary', 'plus')) +
-    `<div class="filters"><input id="prq" placeholder="ძებნა: დასახელება, არტიკული, № ან ლოკაცია" value="${esc(prQ)}" style="width:340px" oninput="prQ=this.value;render();refocus('#prq')">
+    `<div class="filters"><input id="prq" placeholder="ძებნა: დასახელება, არტიკული, № ან ლოკაცია" value="${esc(prQ)}" style="width:340px" oninput="prQ=this.value;LIM={};render();refocus('#prq')">
    <label style="display:flex;gap:6px;align-items:center;cursor:pointer"><input type="checkbox" ${prLow ? 'checked' : ''} onchange="prLow=this.checked;render()">მხოლოდ მცირე მარაგი</label><span class="sub">${list.length} / ${S.products.length}</span></div>
   <div class="card"><div class="tw"><table class="t"><thead><tr><th>უნიკ. №</th><th>არტიკული</th><th>დასახელება</th><th>ზომის ერთ.</th>${wh2 ? `<th class="num">${esc(S.wh[1])}</th><th class="num">${esc(S.wh[2])}</th>` : '<th class="num">ნაშთი</th>'}<th>ლოკაცია</th><th class="num">საშ. ღირებ.</th><th class="num">ღირებულება</th><th>სტატუსი</th></tr></thead><tbody>
-  ${list.map(p => `<tr class="click" onclick="openProduct('${p.id}')"><td class="mono">${p.id}</td><td class="mono">${esc(p.art)}</td><td><b style="font-weight:500">${esc(p.name)}</b></td><td>${esc(p.uom)}</td>${whs().map(w => `<td class="num">${qfmt(p.stock[w].q)}</td>`).join('')}<td class="mono">${whs().map(w => esc(p.stock[w].loc || '—')).join(' / ')}</td><td class="num">${money(p.cost)}</td><td class="num">${money(totQ(p) * p.cost)}</td><td>${stockBadge(p)}</td></tr>`).join('') || emptyRow(wh2 ? 11 : 10, S.products.length ? 'ვერ მოიძებნა' : 'პროდუქტი ჯერ არ არის — დაამატეთ ხელით ან CSV იმპორტით')}
-  </tbody></table></div></div>`;
+  ${limited('products', list).rows.map(p => `<tr class="click" onclick="openProduct('${p.id}')"><td class="mono">${p.id}</td><td class="mono">${esc(p.art)}</td><td><b style="font-weight:500">${esc(p.name)}</b></td><td>${esc(p.uom)}</td>${whs().map(w => `<td class="num">${qfmt(p.stock[w].q)}</td>`).join('')}<td class="mono">${whs().map(w => esc(p.stock[w].loc || '—')).join(' / ')}</td><td class="num">${money(p.cost)}</td><td class="num">${money(totQ(p) * p.cost)}</td><td>${stockBadge(p)}</td></tr>`).join('') || emptyRow(wh2 ? 11 : 10, S.products.length ? 'ვერ მოიძებნა' : 'პროდუქტი ჯერ არ არის — დაამატეთ ხელით ან CSV იმპორტით')}
+  </tbody></table></div>${limited('products', list).more}</div>`;
 };
 function openProduct(id, fromPO = false) {
   const p = id ? P(id) : null;
@@ -517,15 +563,15 @@ VIEWS.stock = () => {
   return ph('საწყობი და ლოკაციები', 'ლოკაციების სია: ნებისმიერი კოდი (მაგ. A-01-02, ZONE-3, გარე საწყობი). პროდუქტს ენიჭება მხოლოდ სიაში არსებული ლოკაცია.',
     (S.settings.wh2 ? `<div class="seg">${[1, 2].map(w => `<button class="${stWh === w ? 'on' : ''}" onclick="stWh=${w};stSel=null;render()">${esc(S.wh[w])}</button>`).join('')}</div>` + btn('გადაადგილება', 'openTransfer()', '', 'swap') : '') +
     btn('სიით დამატება', 'openBulkLoc()', '', 'plus') + btn('ახალი ლოკაცია', 'openLocation()', 'primary', 'plus')) +
-  `<div class="filters"><div class="gsearch" style="max-width:420px">${ic('search')}<input id="stq" placeholder="ლოკაცია, აღწერა ან პროდუქტი…" value="${esc(stQ)}" oninput="stQ=this.value;render();refocus('#stq')"></div>
+  `<div class="filters"><div class="gsearch" style="max-width:420px">${ic('search')}<input id="stq" placeholder="ლოკაცია, აღწერა ან პროდუქტი…" value="${esc(stQ)}" oninput="stQ=this.value;LIM={};render();refocus('#stq')"></div>
    <label style="display:flex;gap:6px;align-items:center;cursor:pointer"><input type="checkbox" ${stEmpty ? 'checked' : ''} onchange="stEmpty=this.checked;render()">მხოლოდ თავისუფალი</label>
    ${offN ? `<label style="display:flex;gap:6px;align-items:center;cursor:pointer"><input type="checkbox" ${stOff ? 'checked' : ''} onchange="stOff=this.checked;render()">გამორთულიც (${offN})</label>` : ''}
    <span class="sub">${list.length} / ${rows.length} ლოკაცია</span></div>
   <div class="cols">
    <div class="card"><div class="tw"><table class="t"><thead><tr><th>კოდი</th><th>აღწერა</th><th class="num">პროდუქტი</th><th class="num">ღირებულება</th><th>სტატუსი</th></tr></thead><tbody>
-    ${list.map(r => `<tr class="click" ${sameCode(stSel, r.code) ? 'style="background:var(--accent-bg)"' : ''} onclick="stSel=this.dataset.c;render()" data-c="${esc(r.code)}"><td class="mono"><b>${esc(r.code)}</b></td><td>${esc(r.note) || '<span class="sub">—</span>'}</td><td class="num">${r.ps.length || '<span class="sub">თავისუფალი</span>'}</td><td class="num">${r.ps.length ? money(value(r.ps)) : ''}</td><td>${r.active ? '<span class="badge b-ok">აქტიური</span>' : '<span class="badge b-closed">გამორთული</span>'}</td></tr>`).join('') || emptyRow(5, rows.length ? 'ვერ მოიძებნა' : 'ლოკაცია ჯერ არ არის — დააჭირეთ „ახალი ლოკაცია“ ან „სიით დამატება“')}
+    ${limited('stock', list).rows.map(r => `<tr class="click" ${sameCode(stSel, r.code) ? 'style="background:var(--accent-bg)"' : ''} onclick="stSel=this.dataset.c;render()" data-c="${esc(r.code)}"><td class="mono"><b>${esc(r.code)}</b></td><td>${esc(r.note) || '<span class="sub">—</span>'}</td><td class="num">${r.ps.length || '<span class="sub">თავისუფალი</span>'}</td><td class="num">${r.ps.length ? money(value(r.ps)) : ''}</td><td>${r.active ? '<span class="badge b-ok">აქტიური</span>' : '<span class="badge b-closed">გამორთული</span>'}</td></tr>`).join('') || emptyRow(5, rows.length ? 'ვერ მოიძებნა' : 'ლოკაცია ჯერ არ არის — დააჭირეთ „ახალი ლოკაცია“ ან „სიით დამატება“')}
     ${unplaced.length && !ql && !stEmpty ? `<tr class="click" ${stSel === '' ? 'style="background:var(--accent-bg)"' : ''} onclick="stSel='';render()"><td><span class="badge b-auto">ლოკაციის გარეშე</span></td><td class="sub">ნაშთი აქვს, ლოკაცია არ აქვს</td><td class="num">${unplaced.length}</td><td class="num">${money(value(unplaced))}</td><td></td></tr>` : ''}
-   </tbody></table></div></div>
+   </tbody></table></div>${limited('stock', list).more}</div>
    <div>
     <div class="card"><header><h3>${sel ? (sel.code ? `${ic('pin')} ${esc(sel.code)}` : 'ლოკაციის გარეშე') : 'ლოკაციის დეტალები'}</h3>${sel && sel.code ? `<div class="acts">${btn('', `openLocation(stSel)`, 'sm ghost', 'edit')}${sel.ps.length ? '' : btn('', `deleteLocation(stSel)`, 'sm ghost danger', 'x')}</div>` : ''}</header>
      ${sel ? `${sel.note ? `<div class="body sub" style="padding-bottom:0">${esc(sel.note)}</div>` : ''}${sel.code && !sel.active ? `<div class="body" style="padding-bottom:0"><span class="badge b-closed">გამორთულია — ახალ პროდუქტს ვერ მიენიჭება</span></div>` : ''}
@@ -614,10 +660,10 @@ VIEWS.vehicles = () => {
   const list = S.vehicles.filter(v => !n || norm(v.plate).includes(n) || norm(v.vin).includes(n) || norm(modelKey(v)).includes(n));
   const st = v => { const os = S.sos.filter(o => o.vid === v.id); return [os.length, os.reduce((a, o) => a + soCost(o), 0)]; };
   return ph('ტექნიკის რეესტრი', S.vehicles.length + ' ერთეული · ძებნა VIN კოდით ან სახელმწიფო ნომრით', btn('CSV იმპორტი', "openImport('vehicles')", '', 'upload') + btn('ახალი ტექნიკა', 'openVehicle()', 'primary', 'plus')) +
-    `<div class="filters"><div class="gsearch" style="max-width:440px">${ic('search')}<input id="vq" placeholder="VIN ან სახელმწიფო ნომერი, მაგ. TB-482 / WF0XXX…" value="${esc(vQ)}" oninput="vQ=this.value;render();refocus('#vq')"></div></div>
+    `<div class="filters"><div class="gsearch" style="max-width:440px">${ic('search')}<input id="vq" placeholder="VIN ან სახელმწიფო ნომერი, მაგ. TB-482 / WF0XXX…" value="${esc(vQ)}" oninput="vQ=this.value;LIM={};render();refocus('#vq')"></div></div>
   <div class="card"><div class="tw"><table class="t"><thead><tr><th>სახ. ნომერი</th><th>VIN კოდი</th><th>მარკა / მოდელი</th><th class="num">წელი</th><th class="num">გარბენი</th><th>განყოფილება</th><th class="num">ორდერი</th><th class="num">დანახარჯი სულ</th></tr></thead><tbody>
-  ${list.map(v => { const [c, t] = st(v); return `<tr class="click" onclick="go('vehicle','${v.id}')"><td>${plate(v.plate)}</td><td class="mono">${esc(v.vin)}</td><td><b style="font-weight:500">${esc(v.make)}</b> ${esc(v.model)}</td><td class="num">${esc(v.year || '')}</td><td class="num">${qfmt(v.km)} კმ</td><td>${esc(v.dept)}</td><td class="num">${c}</td><td class="num"><b>${money(t)}</b></td></tr>`; }).join('') || emptyRow(8, S.vehicles.length ? 'ვერ მოიძებნა' : 'ტექნიკა ჯერ არ არის — დაამატეთ ხელით ან CSV იმპორტით')}
-  </tbody></table></div></div>`;
+  ${limited('vehicles', list).rows.map(v => { const [c, t] = st(v); return `<tr class="click" onclick="go('vehicle','${v.id}')"><td>${plate(v.plate)}</td><td class="mono">${esc(v.vin)}</td><td><b style="font-weight:500">${esc(v.make)}</b> ${esc(v.model)}</td><td class="num">${esc(v.year || '')}</td><td class="num">${qfmt(v.km)} კმ</td><td>${esc(v.dept)}</td><td class="num">${c}</td><td class="num"><b>${money(t)}</b></td></tr>`; }).join('') || emptyRow(8, S.vehicles.length ? 'ვერ მოიძებნა' : 'ტექნიკა ჯერ არ არის — დაამატეთ ხელით ან CSV იმპორტით')}
+  </tbody></table></div>${limited('vehicles', list).more}</div>`;
 };
 function openVehicle(id) {
   const v = id ? V(id) : {};
@@ -651,20 +697,26 @@ VIEWS.vehicle = id => {
 };
 
 /* ================= catalog ================= */
-let catModel = 'all';
+let catModel = 'all', catQ = '';
 VIEWS.catalog = () => {
   const allM = models();
   if (catModel !== 'all' && !allM.includes(catModel)) catModel = 'all';
   const ms = catModel === 'all' ? allM : [catModel];
-  const rows = S.products.filter(p => catModel === 'all' || catEntries(catModel).some(e => e.pid === p.id));
-  const histN = allM.reduce((a, m) => a + catEntries(m).filter(e => !e.manual).length, 0);
+  const ql = catQ.trim().toLowerCase(), n = norm(catQ);
+  // "All models" lists products linked to at least one model; one model lists its links. Search widens to every product.
+  const linked = p => ms.some(m => catEntry(m, p.id));
+  const all = S.products.filter(p => ql ? (p.name.toLowerCase().includes(ql) || norm(p.art).includes(n)) : linked(p));
+  const { rows, more } = limited('catalog', all);
+  let histN = 0;
+  catIndex().forEach(mm => mm.forEach(e => { if (!e.manual && e.hist > 0) histN++; }));
   if (!allM.length) return ph('კატალოგი', 'რომელ ტექნიკაზე რა პროდუქტი ყენდება') + '<div class="card"><div class="empty">კატალოგისთვის ჯერ დაამატეთ ტექნიკა და პროდუქტები</div></div>';
   return ph('კატალოგი', 'რომელ ტექნიკაზე რა პროდუქტი ყენდება · ივსება ხელით და სერვის ორდერების ისტორიიდან',
-    `<select onchange="catModel=this.value;render()"><option value="all">ყველა მოდელი</option>${allM.map(m => `<option ${catModel === m ? 'selected' : ''}>${esc(m)}</option>`).join('')}</select>` + btn('ისტორიიდან შევსება', "call('catalog.learn',{},n=>n?n+' კავშირი (2+ გამოყენება) დადასტურდა':'ახალი კავშირი ვერ მოიძებნა')", '', 'spark')) +
+    `<select onchange="catModel=this.value;LIM={};render()"><option value="all">ყველა მოდელი</option>${allM.map(m => `<option ${catModel === m ? 'selected' : ''}>${esc(m)}</option>`).join('')}</select>` + btn('ისტორიიდან შევსება', "call('catalog.learn',{},n=>n?n+' კავშირი (2+ გამოყენება) დადასტურდა':'ახალი კავშირი ვერ მოიძებნა')", '', 'spark')) +
     `<div class="note ok">${ic('spark')}<div>სერვის ორდერების ისტორიიდან ნაპოვნია <b>${histN}</b> დაუდასტურებელი კავშირი. დააჭირეთ უჯრას ხელით მისაბმელად ან მოსახსნელად. კატალოგი სერვის ორდერში მხოლოდ <b>რეკომენდაციაა</b> და გაცემას არ ზღუდავს.</div></div>
+  <div class="filters"><div class="gsearch" style="max-width:420px">${ic('search')}<input id="catq" placeholder="პროდუქტის ძებნა მისაბმელად — დასახელება ან არტიკული" value="${esc(catQ)}" oninput="catQ=this.value;LIM={};render();refocus('#catq')"></div><span class="sub">${all.length} პროდუქტი${ql ? '' : ' კავშირით'}</span></div>
   <div class="card"><div class="tw"><table class="t matrix"><thead><tr><th>პროდუქტი</th>${ms.map(m => `<th>${esc(m)}</th>`).join('')}</tr></thead><tbody>
-  ${rows.map(p => `<tr><td><div style="font-weight:500">${esc(p.name)}</div><div class="sub mono">${esc(p.art)}</div></td>${ms.map(m => { const e = catEntries(m).find(x => x.pid === p.id); const cls = e ? (e.manual && e.hist ? 'both' : e.manual ? 'man' : 'hist') : ''; return `<td><button class="mx ${cls}" onclick="call('catalog.toggle',{model:'${esc(jsq(m))}',pid:'${p.id}'},r=>r?'მიება: ${esc(jsq(p.name))}':'ხელით მიბმა მოიხსნა')" title="${e ? (e.manual ? 'ხელით მიბმული' : '') + (e.hist ? ' · ისტორიაში ' + e.hist + '-ჯერ' : '') : 'დააჭირეთ მისაბმელად'}">${e ? (e.hist ? e.hist + '×' : '●') : ''}</button></td>`; }).join('')}</tr>`).join('') || emptyRow(ms.length + 1, 'პროდუქტი არ არის')}
-  </tbody></table></div>
+  ${rows.map(p => `<tr><td><div style="font-weight:500">${esc(p.name)}</div><div class="sub mono">${esc(p.art)}</div></td>${ms.map(m => { const e = catEntry(m, p.id); const cls = e ? (e.manual && e.hist ? 'both' : e.manual ? 'man' : 'hist') : ''; return `<td><button class="mx ${cls}" onclick="call('catalog.toggle',{model:'${esc(jsq(m))}',pid:'${p.id}'},r=>r?'მიება: ${esc(jsq(p.name))}':'ხელით მიბმა მოიხსნა')" title="${e ? (e.manual ? 'ხელით მიბმული' : '') + (e.hist ? ' · ისტორიაში ' + e.hist + '-ჯერ' : '') : 'დააჭირეთ მისაბმელად'}">${e ? (e.hist ? e.hist + '×' : '●') : ''}</button></td>`; }).join('')}</tr>`).join('') || emptyRow(ms.length + 1, ql ? 'ვერ მოიძებნა' : 'კავშირი ჯერ არ არის — მოძებნეთ პროდუქტი მისაბმელად')}
+  </tbody></table></div>${more}
   <div class="body legend" style="border-top:1px solid var(--line2);margin:0"><span><i style="background:var(--accent)"></i>ხელით მიბმული</span><span><i style="background:var(--ok-bg);border:1px solid #b6dec6"></i>ისტორიიდან (N× = გამოყენების რაოდენობა)</span><span><i style="background:var(--accent);box-shadow:0 0 0 2px #b6dec6"></i>ორივე</span></div></div>`;
 };
 
@@ -672,7 +724,8 @@ VIEWS.catalog = () => {
 let repTab = 'veh', repV = 'all', repFrom = '', repTo = '', repWh = 'all', repLow = false;
 function vehReport() {
   const os = S.sos.filter(o => (repV === 'all' || o.vid === repV) && o.date >= repFrom && o.date <= repTo);
-  const byV = S.vehicles.map(v => { const vo = os.filter(o => o.vid === v.id); return { v, n: vo.length, p: vo.reduce((a, o) => a + partsCost(o), 0), s: vo.reduce((a, o) => a + svcCost(o), 0) }; }).filter(r => r.n).sort((a, b) => (b.p + b.s) - (a.p + a.s));
+  const g = new Map(); os.forEach(o => { if (!g.has(o.vid)) g.set(o.vid, []); g.get(o.vid).push(o); });
+  const byV = S.vehicles.map(v => { const vo = g.get(v.id) || []; return { v, n: vo.length, p: vo.reduce((a, o) => a + partsCost(o), 0), s: vo.reduce((a, o) => a + svcCost(o), 0) }; }).filter(r => r.n).sort((a, b) => (b.p + b.s) - (a.p + a.s));
   return { os, byV };
 }
 function stockReport() {
@@ -704,10 +757,10 @@ VIEWS.reports = () => {
       <label style="display:flex;gap:6px;align-items:center;cursor:pointer"><input type="checkbox" ${repLow ? 'checked' : ''} onchange="repLow=this.checked;render()">მხოლოდ მინიმუმზე ნაკლები</label><span class="sub">მდგომარეობა ${fmtD(TODAY)}</span></div>
      <div class="kpis">${kpi('ნაშთის ღირებულება', money(tv), list.length + ' პოზიცია')}${kpi('მცირე მარაგი', list.filter(p => p.min > 0 && q(p) < p.min).length, 'შესყიდვაა საჭირო', 'warn')}${kpi('ნულოვანი ნაშთი', list.filter(p => q(p) === 0).length, 'პოზიცია')}${kpi('ლოკაციით აღრიცხული', S.products.filter(p => p.stock[1].loc).length + '/' + S.products.length, 'პროდუქტი')}</div>
      <div class="card"><div class="tw"><table class="t"><thead><tr><th>უნიკ. №</th><th>არტიკული</th><th>დასახელება</th><th>ლოკაცია</th><th class="num">ნაშთი</th><th class="num">მინ.</th><th class="num">საშ. ღირებ.</th><th class="num">ღირებულება</th><th>სტატუსი</th></tr></thead><tbody>
-      ${list.map(p => `<tr class="click" onclick="openProduct('${p.id}')"><td class="mono">${p.id}</td><td class="mono">${esc(p.art)}</td><td>${esc(p.name)}</td><td class="mono">${ws.map(w => esc(p.stock[w].loc || '—')).join(' / ')}</td><td class="num"><b>${qfmt(q(p))}</b> ${esc(p.uom)}</td><td class="num">${qfmt(p.min)}</td><td class="num">${money(p.cost)}</td><td class="num">${money(q(p) * p.cost)}</td><td>${p.min > 0 && q(p) < p.min ? '<span class="badge b-low">მცირე</span>' : '<span class="badge b-ok">OK</span>'}</td></tr>`).join('') || emptyRow(9, 'პროდუქტი არ არის')}
-     </tbody><tfoot><tr><td colspan="7">სულ</td><td class="num">${money(tv)}</td><td></td></tr></tfoot></table></div></div>`;
+      ${limited('repstock', list).rows.map(p => `<tr class="click" onclick="openProduct('${p.id}')"><td class="mono">${p.id}</td><td class="mono">${esc(p.art)}</td><td>${esc(p.name)}</td><td class="mono">${ws.map(w => esc(p.stock[w].loc || '—')).join(' / ')}</td><td class="num"><b>${qfmt(q(p))}</b> ${esc(p.uom)}</td><td class="num">${qfmt(p.min)}</td><td class="num">${money(p.cost)}</td><td class="num">${money(q(p) * p.cost)}</td><td>${p.min > 0 && q(p) < p.min ? '<span class="badge b-low">მცირე</span>' : '<span class="badge b-ok">OK</span>'}</td></tr>`).join('') || emptyRow(9, 'პროდუქტი არ არის')}
+     </tbody><tfoot><tr><td colspan="7">სულ</td><td class="num">${money(tv)}</td><td></td></tr></tfoot></table></div>${limited('repstock', list).more}</div>`;
   } else {
-    h += `<div class="note">${ic('info')}<div>ნაჩვენებია ბოლო ${S.moves.length} მოძრაობა. სრული ჟურნალი — „Excel (CSV)“ ღილაკით.</div></div><div class="card">${movesTable(S.moves)}</div>`;
+    h += `<div class="note">${ic('info')}<div>ნაჩვენებია ბოლო ${S.moves.length} მოძრაობა. სრული ჟურნალი — „Excel (CSV)“ ღილაკით.</div></div><div class="card">${movesTable(limited('moves', S.moves).rows)}${limited('moves', S.moves).more}</div>`;
   }
   return h;
 };

@@ -173,3 +173,22 @@ test('company name is required to finish setup', () => {
   assert.equal(DB.getState().settings.setupDone, false);
   assert.throws(() => DB.exec('setup.complete', { company: { name: ' ' } }), /კომპანიის/);
 });
+
+test('after a command only changed service orders are sent, and they match a full reload', () => {
+  const { sup, pid, vid } = fresh();
+  DB.exec('po.create', { sup, lines: [{ pid, qty: 5, price: 10 }] });
+  const a = DB.exec('so.create', { vid, resp: 'ა' });
+  DB.exec('so.create', { vid, resp: 'ბ' });
+  DB.getState();
+  DB.exec('so.issue', { id: a, pid, qty: 1 });
+  const d = DB.getState({ delta: true });
+  assert.equal(d.sos, undefined);
+  assert.deepEqual(d.sosUpsert.map(o => o.id), [a]);
+  assert.equal(d.sosUpsert[0].parts.length, 1);
+  assert.equal(DB.getState({ delta: true }).sosUpsert.length, 0);
+  day(2026, 11, 20);
+  assert.equal(DB.getState({ delta: true }).sosUpsert.length, 2, 'auto-closed orders are sent as changes');
+  const full = DB.getState();
+  DB.close(); DB.open(':memory:');
+  assert.equal(full.sos.every(o => o.status === 'auto'), true);
+});

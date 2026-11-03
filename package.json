@@ -1,7 +1,7 @@
 {
   "name": "belo-wms",
   "productName": "Belo WMS",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "საწყობის მარაგის და გახარჯვის აღრიცხვა — ლოკალური, ოფლაინ",
   "main": "src/main/main.js",
   "private": true,
@@ -11,7 +11,9 @@
     "dist:win": "electron-builder --win nsis --x64",
     "dist:mac": "electron-builder --mac dir",
     "make-icon": "electron scripts/make-icon.js",
-    "smoke": "BELO_SMOKE=1 BELO_DATA=./.smoke/data BELO_OUT=./.smoke/out electron ."
+    "smoke": "BELO_SMOKE=1 BELO_DATA=./.smoke/data BELO_OUT=./.smoke/out electron .",
+    "load": "node test/load.js .load",
+    "perf": "BELO_PERF=1 BELO_DATA=./.load BELO_OUT=./.perf electron ."
   },
   "devDependencies": {
     "electron": "44.10.1",

@@ -22,8 +22,9 @@ function log(msg) {
   } catch { /* logging must never break the app */ }
 }
 
-function withState(out) {
-  const st = DB.getState();
+// After a command only the changed service orders are sent (sosUpsert); the page merges them (apply() in app.js).
+function withState(out, delta = true) {
+  const st = DB.getState({ delta });
   st.backupOk = !!st.settings.backupDir && fs.existsSync(st.settings.backupDir);
   st.app = { version: app.getVersion(), dbPath, dataDir: dataDir() };
   return { ok: true, ...out, state: st };
@@ -39,10 +40,12 @@ const handle = (ch, fn) => ipcMain.handle(ch, async (e, ...args) => {
 });
 
 function registerIpc() {
-  handle('state', () => withState({}));
+  handle('state', () => withState({}, false));
   handle('cmd', (name, args) => {
     const result = DB.exec(String(name), args);
-    if (!String(name).endsWith('.check')) dirty = true;
+    // Read-only checks return no state, so no change notice is lost on a reply the page ignores.
+    if (String(name).endsWith('.check')) return { ok: true, result };
+    dirty = true;
     return withState({ result });
   });
   handle('backup.run', async () => {
@@ -95,7 +98,7 @@ function createWindow() {
   win.removeMenu();
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   win.webContents.on('will-navigate', e => e.preventDefault());
-  win.once('ready-to-show', () => { if (!process.env.BELO_SMOKE) win.maximize(); win.show(); });
+  win.once('ready-to-show', () => { if (!process.env.BELO_SMOKE && !process.env.BELO_PERF) win.maximize(); win.show(); });
   win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
 }
 
@@ -115,6 +118,7 @@ if (!app.requestSingleInstanceLock()) {
     registerIpc();
     createWindow();
     if (process.env.BELO_SMOKE) require(path.join(__dirname, '..', '..', 'test', 'smoke.js'))(win, { app, DB });
+    if (process.env.BELO_PERF) require(path.join(__dirname, '..', '..', 'test', 'perf.js'))(win, { app, DB });
   });
   app.on('window-all-closed', () => app.quit());
   // Automatic backup when the program closes, if a backup drive is connected and something changed.

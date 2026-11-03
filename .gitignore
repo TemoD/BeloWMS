@@ -3,3 +3,6 @@ dist/
 .smoke/
 dist-win.log
 .DS_Store
+.load/
+.load3/
+.perf/

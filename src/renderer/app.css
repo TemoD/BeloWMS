@@ -271,3 +271,6 @@ body.setup .main{grid-template-columns:1fr} body.setup nav.side,body.setup .tool
 }
 .setrow .mono{word-break:break-all}
 .toast span{word-break:break-word}
+/* catalog: keep the product column visible while scrolling across models */
+.matrix th:first-child,.matrix td:first-child{position:sticky;left:0;background:#fff;z-index:1;min-width:260px;box-shadow:1px 0 0 var(--line2)}
+.matrix thead th:first-child{background:#fafbfc;z-index:2}
