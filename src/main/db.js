@@ -130,6 +130,14 @@ function serialFree(pid, serials, exceptLine = 0) {
   }
 }
 const isDate = d => /^\d{4}-\d{2}-\d{2}$/.test(String(d || ''));
+// Road vehicles have the standard 17-character VIN (ISO 3779: no I, O, Q). Machinery such as JCB uses serial
+// numbers of other lengths (9, 11, 12, 18, 21…), so any length from 5 to 25 is accepted for those.
+function vinProblem(v) {
+  if (v.length < 5 || v.length > 25) return 'VIN / სერიული ნომერი უნდა იყოს 5–25 სიმბოლო';
+  if (!/^[A-Z0-9-]+$/.test(v)) return 'VIN-ში დასაშვებია მხოლოდ ლათინური ასოები, ციფრები და „-“';
+  if (v.length === 17 && /[IOQ]/.test(v)) return '17-ნიშნა VIN არ შეიცავს I, O, Q ასოებს';
+  return '';
+}
 function whOk(w) {
   w = +w;
   if (w !== 1 && w !== 2) fail('უცნობი საწყობი');
@@ -255,7 +263,8 @@ function importCheck(type, rows) {
       const [plate, vin, make, model, year, km] = c;
       const V = vin.toUpperCase();
       if (!plate) e.push('ნომერი ცარიელია');
-      if (V.length !== 17 || /[IOQ]/.test(V)) e.push('VIN: 17 სიმბოლო, I/O/Q გარეშე');
+      const ve = vinProblem(V);
+      if (ve) e.push(ve);
       if (!make || !model) e.push('მარკა / მოდელი ცარიელია');
       if (![year, km].every(v => okNum(v))) e.push('რიცხვი არასწორია');
       if (V && seen.has(V)) e.push('VIN მეორდება ფაილში');
@@ -367,7 +376,8 @@ const commands = {
   'vehicle.save'({ id, plate, vin, make, model, year, km, dept }) {
     const pl = str(plate, 20).toUpperCase(), v = str(vin, 30).toUpperCase(), mk = str(make, 60), md = str(model, 60);
     if (!pl || !mk || !md) fail('შეავსეთ სახელმწიფო ნომერი, მარკა და მოდელი');
-    if (v.length !== 17 || /[IOQ]/.test(v)) fail('VIN კოდი უნდა იყოს 17 სიმბოლო (I, O, Q გარეშე)');
+    const ve = vinProblem(v);
+    if (ve) fail(ve);
     const dup = get('SELECT id FROM vehicles WHERE vin=? AND id<>?', v, id || '');
     if (dup) fail('ეს VIN უკვე რეესტრშია (' + dup.id + ')');
     const y = str(year) === '' ? null : Math.round(num(year)), k = str(km) === '' ? 0 : Math.round(num(km));

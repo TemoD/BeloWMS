@@ -111,7 +111,7 @@ const mkVin = () => { let v; do v = Array.from({ length: 17 }, () => pick(VIN)).
 const L = 'ABCDEFGHIKLMNOPRSTUVWXYZ';
 const mkPlate = () => { let p; do p = `${pick(L)}${pick(L)}-${ri(100, 999)}-${pick(L)}${pick(L)}`; while (plates.has(p)); plates.add(p); return p; };
 const vehRows = Array.from({ length: 600 }, (_, i) => { const m = MODELS[i % MODELS.length].split(' '); return [mkPlate(), mkVin(), m[0], m.slice(1).join(' '), String(ri(2008, 2025)), String(ri(5000, 450000)), pick(['ლოგისტიკა', 'მიწოდება', 'სატვირთო', 'ადმინისტრაცია', 'სერვისი'])]; });
-const vehBad = [['ZZ-000-ZZ', 'SHORTVIN', 'Ford', 'Transit', '2019', '1', ''], ['QQ-111-QQ', 'IOQIOQIOQIOQIOQIO', 'Ford', 'Transit', '2019', '1', '']];
+const vehBad = [['ZZ-000-ZZ', 'AB1', 'Ford', 'Transit', '2019', '1', ''], ['QQ-111-QQ', 'IOQIOQIOQIOQIOQIO', 'Ford', 'Transit', '2019', '1', '']];
 const vehCheck = timed('import.check 602 vehicles', () => DB.exec('import.check', { type: 'vehicles', rows: [...vehRows, ...vehBad] }));
 const vehApplied = timed('import.apply 602 vehicles', () => DB.exec('import.apply', { type: 'vehicles', rows: [...vehRows, ...vehBad] }));
 

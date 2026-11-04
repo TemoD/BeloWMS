@@ -20,6 +20,7 @@ Rules enforced in the database layer:
 - Open service orders close automatically N days (default 7) after their **last change**, and can be reopened.
 - The catalog is a recommendation only; it never blocks issuing a part.
 - Locations are a managed list per warehouse (free codes such as `A-01-02` or `ZONE-3`); a product can only be placed on an active location from the list. Renaming a location moves its products; only empty locations can be deleted. CSV import adds unknown locations to the list.
+- VIN: 17 characters for road vehicles (no I, O, Q); 5–25 characters for machinery serials such as JCB (9, 11, 12, 18, 21…); Latin letters, digits and `-` only; unique.
 - Serial numbers are optional on every issue, at most one per unit, and a serial can be on only one vehicle at a time (issued and not returned). Returns record which serials came back.
 
 Data lives in `%APPDATA%\Belo WMS\belo-wms.db`, with logs in `%APPDATA%\Belo WMS\logs\app.log`. Uninstalling does not delete the data.

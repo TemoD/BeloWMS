@@ -665,9 +665,18 @@ VIEWS.vehicles = () => {
   ${limited('vehicles', list).rows.map(v => { const [c, t] = st(v); return `<tr class="click" onclick="go('vehicle','${v.id}')"><td>${plate(v.plate)}</td><td class="mono">${esc(v.vin)}</td><td><b style="font-weight:500">${esc(v.make)}</b> ${esc(v.model)}</td><td class="num">${esc(v.year || '')}</td><td class="num">${qfmt(v.km)} კმ</td><td>${esc(v.dept)}</td><td class="num">${c}</td><td class="num"><b>${money(t)}</b></td></tr>`; }).join('') || emptyRow(8, S.vehicles.length ? 'ვერ მოიძებნა' : 'ტექნიკა ჯერ არ არის — დაამატეთ ხელით ან CSV იმპორტით')}
   </tbody></table></div>${limited('vehicles', list).more}</div>`;
 };
+// Same rule as vinProblem() in db.js: 17 = road-vehicle VIN without I/O/Q; 5–25 = machinery serial (e.g. JCB).
+function vinHint(v) {
+  const n = v.length;
+  if (!n) return '17 სიმბოლო — ავტომობილი · 5–25 — ტექნიკა (მაგ. JCB)';
+  if (!/^[A-Z0-9-]*$/.test(v)) return n + ' · მხოლოდ ლათინური ასოები, ციფრები და „-“';
+  if (n === 17) return '17 · სტანდარტული VIN' + (/[IOQ]/.test(v) ? ' · I, O, Q დაუშვებელია' : '');
+  if (n < 5) return n + ' · მინიმუმ 5 სიმბოლო';
+  return n + ' · ტექნიკის სერიული ნომერი';
+}
 function openVehicle(id) {
   const v = id ? V(id) : {};
-  openModal(id ? 'ტექნიკის რედაქტირება' : 'ახალი ტექნიკა', `<div class="grid2"><div class="field"><label class="req">სახელმწიფო ნომერი</label><input id="vp" class="mono" autofocus value="${esc(v.plate)}" placeholder="AA-123-BB"></div><div class="field"><label class="req">VIN კოდი</label><input id="vv" class="mono" maxlength="17" value="${esc(v.vin)}" placeholder="17 სიმბოლო" oninput="this.value=this.value.toUpperCase();$('#vvh').textContent=this.value.length+'/17'+(/[IOQ]/.test(this.value)?' · I, O, Q დაუშვებელია':'')"><span class="hint" id="vvh">${(v.vin || '').length}/17</span></div></div>
+  openModal(id ? 'ტექნიკის რედაქტირება' : 'ახალი ტექნიკა', `<div class="grid2"><div class="field"><label class="req">სახელმწიფო ნომერი</label><input id="vp" class="mono" autofocus value="${esc(v.plate)}" placeholder="AA-123-BB"></div><div class="field"><label class="req">VIN / სერიული №</label><input id="vv" class="mono" maxlength="25" value="${esc(v.vin)}" placeholder="17 (ავტომობილი) ან 5–25 (ტექნიკა)" oninput="this.value=this.value.toUpperCase();$('#vvh').textContent=vinHint(this.value)"><span class="hint" id="vvh">${vinHint(v.vin || '')}</span></div></div>
    <div class="grid3"><div class="field"><label class="req">მარკა</label><input id="vm" list="dlmk" value="${esc(v.make)}"><datalist id="dlmk">${[...new Set(S.vehicles.map(x => x.make))].map(m => `<option value="${esc(m)}">`).join('')}</datalist></div><div class="field"><label class="req">მოდელი</label><input id="vmo" value="${esc(v.model)}"></div><div class="field"><label>წელი</label><input id="vy" type="number" value="${esc(v.year ?? '')}" placeholder="2024"></div></div>
    <div class="grid2"><div class="field"><label>გარბენი (კმ)</label><input id="vk" type="number" min="0" value="${esc(v.km ?? '')}"></div><div class="field"><label>განყოფილება</label><input id="vd" value="${esc(v.dept)}"></div></div>`,
   btn('გაუქმება', 'closeModal()') + btn('შენახვა', `saveVehicle(${id ? `'${id}'` : 'null'})`, 'primary', 'check'));

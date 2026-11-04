@@ -107,7 +107,7 @@ test('transfers need the second warehouse and enough stock', () => {
 test('validation: duplicate article, bad VIN, unknown location', () => {
   fresh();
   assert.throws(() => DB.exec('product.save', { art: 'of-1', name: 'x' }), /უკვე არსებობს/);
-  assert.throws(() => DB.exec('vehicle.save', { plate: 'X', vin: 'SHORT', make: 'a', model: 'b' }), /VIN/);
+  assert.throws(() => DB.exec('vehicle.save', { plate: 'X', vin: 'AB12', make: 'a', model: 'b' }), /5–25/);
   assert.throws(() => DB.exec('product.save', { art: 'Z', name: 'z', locs: { 1: 'shelf 3' } }), /არ არის სიაში/);
 });
 
@@ -201,4 +201,18 @@ test('catalog recommendation can be switched off and on; negative stock stays fo
   DB.exec('settings.set', { key: 'catalogRec', value: true });
   assert.equal(DB.getState().settings.catalogRec, true);
   assert.throws(() => DB.exec('settings.set', { key: 'negativeStock', value: true }), /უცნობი პარამეტრი/);
+});
+
+test('VIN: 17 characters for road vehicles (no I/O/Q), 5–25 for machinery serials such as JCB', () => {
+  fresh();
+  const ok = ['JCB123456', 'JCB3CX1234', 'JCB3CX12345A', 'JCB3CX14TC1234567X', 'JCBJS220LC123456789AB', 'jcb-3cx-001234'];
+  ok.forEach((vin, i) => DB.exec('vehicle.save', { plate: 'M-' + i, vin, make: 'JCB', model: '3CX' }));
+  const saved = DB.getState().vehicles.map(v => v.vin);
+  assert.ok(saved.includes('JCB-3CX-001234'), 'stored in capitals');
+  assert.ok(saved.some(v => v.length === 21) && saved.some(v => v.length === 9));
+  assert.throws(() => DB.exec('vehicle.save', { plate: 'Y', vin: 'JCB1', make: 'JCB', model: '3CX' }), /5–25/);
+  assert.throws(() => DB.exec('vehicle.save', { plate: 'Y', vin: 'A'.repeat(26), make: 'JCB', model: '3CX' }), /5–25/);
+  assert.throws(() => DB.exec('vehicle.save', { plate: 'Y', vin: 'JCB 3CX 12', make: 'JCB', model: '3CX' }), /ლათინური/);
+  assert.throws(() => DB.exec('vehicle.save', { plate: 'Y', vin: 'MR0HA3CD1M051234O', make: 'Toyota', model: 'Hilux' }), /I, O, Q/);
+  assert.deepEqual(DB.exec('import.check', { type: 'vehicles', rows: [['P1', 'JCBJS220LC987654321XY', 'JCB', 'JS220', '2019', '100', ''], ['P2', 'X1', 'JCB', '3CX', '', '', '']] }).map(r => r.st), ['new', 'err']);
 });
