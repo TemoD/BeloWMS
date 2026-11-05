@@ -1,4 +1,4 @@
-/* Belo WMS styles */
+/* Axioma WMS styles */
 :root{
   --desk:#c5ced9; --bg:#f1f4f8; --panel:#fff; --ink:#18212d; --muted:#5b6878; --faint:#8a96a5;
   --line:#dce2ea; --line2:#edf1f5; --hover:#f6f8fb;
@@ -279,3 +279,13 @@ body.setup .main{grid-template-columns:1fr} body.setup nav.side,body.setup .tool
 .gsearch>svg{top:50%;transform:translateY(-50%);pointer-events:none;z-index:1}
 .gsr{top:calc(100% + 4px)}
 .badge.nodot::before{display:none}
+
+/* settings: about the program */
+.about-head{display:flex;gap:14px;align-items:center;padding:16px;border-bottom:1px solid var(--line2)}
+.about-logo{width:56px;height:56px;border-radius:12px;flex:none}
+.about-name{font-size:18px;font-weight:600}
+.about-name .sub{font-weight:400;margin-left:4px}
+.about-grid{display:grid;grid-template-columns:140px minmax(0,1fr);gap:8px 12px;padding:14px 16px;font-size:13.5px;border-bottom:1px solid var(--line2);align-items:center}
+.link{color:var(--accent);cursor:pointer;display:inline-flex;gap:5px;align-items:center;text-decoration:none}
+.link:hover{text-decoration:underline}
+.about-foot{padding:9px 16px;background:#fafbfc;color:var(--faint);font-size:12px;text-align:center;border-radius:0 0 var(--r) var(--r)}

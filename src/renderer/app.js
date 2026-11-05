@@ -1,5 +1,5 @@
 'use strict';
-/* Belo WMS — screens. Data lives in the local SQLite database; every change goes through window.api (src/preload.js)
+/* Axioma WMS — screens. Data lives in the local SQLite database; every change goes through window.api (src/preload.js)
    to src/main/db.js, which validates it and returns the fresh state. */
 
 /* ================= helpers ================= */
@@ -46,7 +46,8 @@ const ICONS = {
   arrowIn: '<path d="M12 4v12M7 11l5 5 5-5M5 20h14"/>',
   arrowOut: '<path d="M12 20V8M7 13l5-5 5 5M5 4h14"/>',
   swap: '<path d="M7 4 3 8l4 4M3 8h14M17 20l4-4-4-4M21 16H7"/>',
-  folder: '<path d="M3 6a1 1 0 0 1 1-1h5l2 2h9a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/>'
+  folder: '<path d="M3 6a1 1 0 0 1 1-1h5l2 2h9a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/>',
+  external: '<path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>'
 };
 const ic = n => `<svg class="i" viewBox="0 0 24 24">${ICONS[n] || ''}</svg>`;
 const btn = (label, on, cls = '', icon = '', dis = false, id = '') => `<button class="btn ${cls}" ${id ? `id="${id}"` : ''} onclick="${on}" ${dis ? 'disabled' : ''}>${icon ? ic(icon) : ''}${label}</button>`;
@@ -180,7 +181,7 @@ function renderNav() {
   $('#sbWh').textContent = 'საწყობი: ' + whs().map(w => S.wh[w]).join(', ');
   const lb = lastBackup();
   $('#sbBk').textContent = 'სარეზერვო ასლი: ' + (lb ? lb.at.slice(0, 16).split(' ').map((x, i) => i ? x : fmtD(x)).join(' ') : 'ჯერ არ შექმნილა') + (S.settings.backupDir && !S.backupOk ? ' · დისკი არ არის მიერთებული' : '');
-  $('#sbVer').textContent = 'Belo WMS v' + S.app.version;
+  $('#sbVer').textContent = 'Axioma WMS v' + S.app.version;
 }
 const VIEWS = {};
 function render() {
@@ -234,7 +235,7 @@ function companyFields(c) {
 const companyValues = () => ({ name: $('#cn').value, tin: $('#ct').value, phone: $('#cp').value, address: $('#ca').value, logo: compLogo });
 function vSetup() {
   compLogo = S.settings.company.logo || '';
-  return `<div class="setup-card"><header><h1>კეთილი იყოს თქვენი მობრძანება Belo WMS-ში</h1><div class="muted">პირველი გაშვება: შეავსეთ კომპანიის მონაცემები. ყველაფერი ინახება ამ კომპიუტერზე, ინტერნეტი არ არის საჭირო.</div></header>
+  return `<div class="setup-card"><header><h1>კეთილი იყოს თქვენი მობრძანება Axioma WMS-ში</h1><div class="muted">პირველი გაშვება: შეავსეთ კომპანიის მონაცემები. ყველაფერი ინახება ამ კომპიუტერზე, ინტერნეტი არ არის საჭირო.</div></header>
    <div class="body">${companyFields(S.settings.company)}
     <div class="field"><label>მთავარი საწყობის დასახელება</label><input id="cw" value="${esc(S.wh[1])}"></div></div>
    <footer>${btn('დაწყება', 'finishSetup()', 'primary', 'check')}</footer></div>`;
@@ -783,15 +784,15 @@ function saveCSV(name, header, rows) { return saveText(name, [header, ...rows].m
 function exportReport() {
   if (repTab === 'veh') {
     const { byV } = vehReport();
-    return saveCSV(`BeloWMS_ტექნიკის_დანახარჯები_${repFrom}_${repTo}.csv`, ['სახ. ნომერი', 'VIN', 'მარკა / მოდელი', 'ორდერი', 'ნაწილები', 'მომსახურება', 'სულ'],
+    return saveCSV(`AxiomaWMS_ტექნიკის_დანახარჯები_${repFrom}_${repTo}.csv`, ['სახ. ნომერი', 'VIN', 'მარკა / მოდელი', 'ორდერი', 'ნაწილები', 'მომსახურება', 'სულ'],
       byV.map(r => [r.v.plate, r.v.vin, modelKey(r.v), r.n, cn(r.p), cn(r.s), cn(r.p + r.s)]));
   }
   if (repTab === 'stock') {
     const { ws, q, list } = stockReport();
-    return saveCSV(`BeloWMS_ნაშთი_${TODAY}.csv`, ['უნიკ. №', 'არტიკული', 'დასახელება', 'ზომის ერთეული', 'ლოკაცია', 'ნაშთი', 'მინ. ნაშთი', 'საშ. ღირებულება', 'ღირებულება'],
+    return saveCSV(`AxiomaWMS_ნაშთი_${TODAY}.csv`, ['უნიკ. №', 'არტიკული', 'დასახელება', 'ზომის ერთეული', 'ლოკაცია', 'ნაშთი', 'მინ. ნაშთი', 'საშ. ღირებულება', 'ღირებულება'],
       list.map(p => [p.id, p.art, p.name, p.uom, ws.map(w => p.stock[w].loc).join(' / '), cn(q(p)), cn(p.min), cn(p.cost), cn(q(p) * p.cost)]));
   }
-  return saveCSV(`BeloWMS_მოძრაობები_${TODAY}.csv`, ['თარიღი', 'ტიპი', 'დოკუმენტი', 'არტიკული', 'დასახელება', 'საწყობი', 'რაოდენობა', 'შენიშვნა'],
+  return saveCSV(`AxiomaWMS_მოძრაობები_${TODAY}.csv`, ['თარიღი', 'ტიპი', 'დოკუმენტი', 'არტიკული', 'დასახელება', 'საწყობი', 'რაოდენობა', 'შენიშვნა'],
     S.moves.map(m => { const p = P(m.pid) || { art: '', name: m.pid }; return [fmtD(m.date), (MOVE_T[m.type] || [m.type])[0], m.ref, p.art, p.name, m.type === 'tr' ? S.wh[m.wh] + ' → ' + S.wh[m.to] : S.wh[m.wh], (m.type === 'out' ? '-' : '') + cn(m.qty), m.note || '']; }));
 }
 
@@ -827,10 +828,14 @@ VIEWS.settings = () => {
    <div class="card"><header><h3>${ic('upload')} CSV იმპორტი</h3></header>
     ${Object.entries(IMP).map(([k, x]) => setRow(x.t, x.d, btn('იმპორტი', `openImport('${k}')`, 'sm', 'upload'))).join('')}
    </div>
-   <div class="card"><header><h3>პროგრამის შესახებ</h3></header>
-    ${setRow('Belo WMS v' + esc(S.app.version), 'ლოკალური, ოფლაინ · მონაცემთა ბაზა: <span class="mono">' + esc(S.app.dbPath) + '</span>', btn('საქაღალდის გახსნა', "window.api.invoke('app.showData')", 'sm', 'folder'))}
-   </div>
-  </div></div>`;
+  </div></div>
+  <div class="card"><header><h3>პროგრამის შესახებ</h3></header>
+   <div class="about-head"><img src="logo.svg" alt="" class="about-logo"><div><div class="about-name">Axioma WMS <span class="sub">v${esc(S.app.version)}</span></div><div class="muted">Workshop Management System</div></div></div>
+   <div class="about-grid"><span class="muted">შემქმნელი</span><b style="font-weight:600">Axioma Software LLC</b>
+    <span class="muted">ვებგვერდი</span><span><a class="link" onclick="window.api.invoke('app.openSite')" title="იხსნება ბრაუზერში">axiomasoft.ge ${ic('external')}</a></span></div>
+   ${setRow('მონაცემთა ბაზა', 'ლოკალური, ოფლაინ · <span class="mono">' + esc(S.app.dbPath) + '</span>', btn('საქაღალდის გახსნა', "window.api.invoke('app.showData')", 'sm', 'folder'))}
+   <div class="about-foot">© 2026 Axioma Software LLC</div>
+  </div>`;
 };
 async function saveCompany() { await call('company.save', { company: companyValues() }, 'კომპანიის მონაცემები შენახულია'); }
 async function loadBackups() {
@@ -930,7 +935,7 @@ function impFile(f) {
   r.onload = () => impParse(r.result, f.name);
   r.readAsText(f, 'UTF-8');
 }
-function impTemplate() { saveText(`BeloWMS_${imp.type}_შაბლონი.csv`, IMP[imp.type].cols.join(';') + '\r\n'); }
+function impTemplate() { saveText(`AxiomaWMS_${imp.type}_შაბლონი.csv`, IMP[imp.type].cols.join(';') + '\r\n'); }
 async function doImport() {
   const b = $('#impgo'); b.disabled = true;
   const res = await call('import.apply', { type: imp.type, rows: imp.rows });
@@ -961,7 +966,7 @@ function printSO(id) {
    <div class="sh-tot">სულ: ${money(soCost(o))}</div>
    <div class="sig"><div>გასცა (მესაწყობე)<br><br>სახელი, გვარი: ______________________<br><br>ხელმოწერა: ______________</div>
     <div>მიიღო (პასუხისმგებელი პირი)<br><br>სახელი, გვარი: <b>${esc(o.resp)}</b><br><br>ხელმოწერა: ______________</div></div>
-   <div class="sh-foot">შექმნილია ${fmtD(TODAY)} · Belo WMS</div>`;
+   <div class="sh-foot">Axioma WMS · axiomasoft.ge</div>`;
   $('#pv').hidden = false;
 }
 function closePrint() { $('#pv').hidden = true; }

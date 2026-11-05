@@ -5,8 +5,14 @@ const fs = require('node:fs');
 const DB = require('./db');
 const Backup = require('./backup');
 
-// Tests and support can point the app at another data folder.
+// Tests and support can point the app at another data folder. Otherwise, if an earlier version (named
+// Belo WMS) left a database, keep using that folder so an update never opens an empty database.
 if (process.env.BELO_DATA) app.setPath('userData', process.env.BELO_DATA);
+else {
+  const legacy = path.join(app.getPath('appData'), 'Belo WMS');
+  if (fs.existsSync(path.join(legacy, 'belo-wms.db'))) app.setPath('userData', legacy);
+}
+const SITE = 'https://axiomasoft.ge/';
 
 let win = null;
 let dbPath = '';
@@ -63,7 +69,7 @@ function registerIpc() {
   handle('backup.restore', async file => {
     let f = file;
     if (!f) {
-      const r = await dialog.showOpenDialog(win, { title: 'აირჩიეთ სარეზერვო ასლი', filters: [{ name: 'Belo WMS', extensions: ['db'] }], properties: ['openFile'] });
+      const r = await dialog.showOpenDialog(win, { title: 'აირჩიეთ სარეზერვო ასლი', filters: [{ name: 'Axioma WMS', extensions: ['db'] }], properties: ['openFile'] });
       if (r.canceled || !r.filePaths[0]) return { ok: true, result: null };
       f = r.filePaths[0];
     }
@@ -88,11 +94,13 @@ function registerIpc() {
     return { ok: true, result: r.filePath };
   });
   handle('app.showData', () => { shell.showItemInFolder(dbPath); return { ok: true }; });
+  // Only the developer's website can be opened from the page, in the default browser.
+  handle('app.openSite', () => { shell.openExternal(SITE); return { ok: true }; });
 }
 
 function createWindow() {
   win = new BrowserWindow({
-    width: 1400, height: 900, minWidth: 1024, minHeight: 640, show: false, title: 'Belo WMS', backgroundColor: '#f1f4f8', autoHideMenuBar: true,
+    width: 1400, height: 900, minWidth: 1024, minHeight: 640, show: false, title: 'Axioma WMS', backgroundColor: '#f1f4f8', autoHideMenuBar: true,
     webPreferences: { preload: path.join(__dirname, '..', 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true, spellcheck: false }
   });
   win.removeMenu();
@@ -108,10 +116,11 @@ if (!app.requestSingleInstanceLock()) {
   app.on('second-instance', () => { if (win) { if (win.isMinimized()) win.restore(); win.focus(); } });
   app.whenReady().then(() => {
     fs.mkdirSync(dataDir(), { recursive: true });
-    dbPath = path.join(dataDir(), 'belo-wms.db');
+    const legacyDb = path.join(dataDir(), 'belo-wms.db');
+    dbPath = fs.existsSync(legacyDb) ? legacyDb : path.join(dataDir(), 'axioma-wms.db');
     try { DB.open(dbPath); } catch (e) {
       log('OPEN FAILED ' + (e.stack || e.message));
-      dialog.showErrorBox('Belo WMS', 'მონაცემთა ბაზის გახსნა ვერ მოხერხდა:\n' + e.message);
+      dialog.showErrorBox('Axioma WMS', 'მონაცემთა ბაზის გახსნა ვერ მოხერხდა:\n' + e.message);
       app.exit(1); return;
     }
     log('started v' + app.getVersion() + ' db=' + dbPath);

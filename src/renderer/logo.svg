@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 600 600">
+  <!-- Axioma logo mark: colours sampled from the Axioma Software logo -->
+  <rect width="600" height="600" rx="70" fill="#062537"/>
+  <path fill="#EEEAE8" fill-rule="evenodd" transform="translate(300 305) scale(1.42) translate(-290 -217)"
+        d="M290 70 440 365 385 365 350 298 140 365Z M285 185 245 275 330 255Z"/>
+</svg>

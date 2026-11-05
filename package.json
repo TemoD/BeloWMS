@@ -1,8 +1,8 @@
 {
-  "name": "belo-wms",
-  "productName": "Belo WMS",
-  "version": "1.1.3",
-  "description": "საწყობის მარაგის და გახარჯვის აღრიცხვა — ლოკალური, ოფლაინ",
+  "name": "axioma-wms",
+  "productName": "Axioma WMS",
+  "version": "1.2.0",
+  "description": "Axioma WMS — Workshop Management System",
   "main": "src/main/main.js",
   "private": true,
   "scripts": {
@@ -23,7 +23,7 @@
   },
   "build": {
     "appId": "ge.belo.wms",
-    "productName": "Belo WMS",
+    "productName": "Axioma WMS",
     "directories": {
       "output": "dist",
       "buildResources": "build"
@@ -49,10 +49,12 @@
       "perMachine": false,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Belo WMS",
+      "shortcutName": "Axioma WMS",
       "deleteAppDataOnUninstall": false,
-      "uninstallDisplayName": "Belo WMS"
+      "uninstallDisplayName": "Axioma WMS"
     },
-    "copyright": "© 2026"
-  }
+    "copyright": "© 2026 Axioma Software LLC"
+  },
+  "author": "Axioma Software LLC",
+  "homepage": "https://axiomasoft.ge/"
 }

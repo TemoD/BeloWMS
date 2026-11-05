@@ -1,5 +1,5 @@
 'use strict';
-// Local SQLite database and every business rule of Belo WMS.
+// Local SQLite database and every business rule of Axioma WMS.
 // The renderer never writes data itself: it calls exec(name, args) through IPC, and each command runs in one transaction.
 const { DatabaseSync } = require('node:sqlite');
 
@@ -70,7 +70,7 @@ function open(file) {
   db.exec('PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=3000;');
   db.exec('CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT)');
   const v = +(get("SELECT value FROM meta WHERE key='schema'")?.value || 0);
-  if (v > MIGRATIONS.length) fail('ბაზა შექმნილია პროგრამის უფრო ახალი ვერსიით — განაახლეთ Belo WMS');
+  if (v > MIGRATIONS.length) fail('ბაზა შექმნილია პროგრამის უფრო ახალი ვერსიით — განაახლეთ Axioma WMS');
   MIGRATIONS.slice(v).forEach((sql, i) => tx(() => { db.exec(sql); run("INSERT OR REPLACE INTO meta VALUES('schema',?)", String(v + i + 1)); }));
   return db;
 }

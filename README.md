@@ -1,4 +1,6 @@
-# Belo WMS
+# Axioma WMS
+
+Workshop Management System by Axioma Software LLC — https://axiomasoft.ge/
 
 Offline Windows program for warehouse stock and parts usage on vehicles: purchase orders, service orders (issue / return), vehicle registry, product master data with shelf locations, fitment catalog, reports, CSV import, USB/SSD backup and PDF service-order forms. The interface is in Georgian.
 
@@ -23,7 +25,7 @@ Rules enforced in the database layer:
 - VIN: 17 characters for road vehicles (no I, O, Q); 5–25 characters for machinery serials such as JCB (9, 11, 12, 18, 21…); Latin letters, digits and `-` only; unique.
 - Serial numbers are optional on every issue, at most one per unit, and a serial can be on only one vehicle at a time (issued and not returned). Returns record which serials came back.
 
-Data lives in `%APPDATA%\Belo WMS\belo-wms.db`, with logs in `%APPDATA%\Belo WMS\logs\app.log`. Uninstalling does not delete the data.
+Data lives in `%APPDATA%\Axioma WMS\axioma-wms.db`, with logs in `logs\app.log` next to it. Installations upgraded from the earlier name (Belo WMS, before 1.2.0) keep using `%APPDATA%\Belo WMS\belo-wms.db`, so no data moves. Uninstalling does not delete the data. The installer's `appId` stays `ge.belo.wms` on purpose, so a new Setup.exe upgrades an existing installation in place.
 
 ## Development
 
@@ -37,7 +39,7 @@ npm run smoke      # drives the real window through the main flows, screenshots 
 ## Building the Windows installer
 
 ```bash
-npm run dist:win   # → dist/Belo WMS Setup <version>.exe
+npm run dist:win   # → dist/Axioma WMS Setup <version>.exe
 ```
 
 Before each release, bump `version` in `package.json`. Installing a new Setup.exe over an old one keeps the data. Database changes go in a new entry at the end of `MIGRATIONS` in `src/main/db.js`; never edit an entry that has shipped.
