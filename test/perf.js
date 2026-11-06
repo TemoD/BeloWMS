@@ -46,6 +46,11 @@ module.exports = function perf(win, { app }) {
       await page('settings-about', `[...document.querySelectorAll('h3')].find(h=>h.textContent.includes('პროგრამის შესახებ')).scrollIntoView()`);
       await page('settings-rules', `[...document.querySelectorAll('h3')].find(h=>h.textContent.includes('აღრიცხვის წესები')).scrollIntoView()`);
       res['catalogRec switch'] = await js(`await call('settings.set',{key:'catalogRec',value:false});go('so',S.sos.find(o=>o.status==='open').id);const hidden=!document.body.innerText.includes('რეკომენდაცია კატალოგიდან');await call('settings.set',{key:'catalogRec',value:true});render();return {hiddenWhenOff:hidden,shownWhenOn:document.body.innerText.includes('რეკომენდაცია კატალოგიდან')}`);
+      res['fitment template build'] = await js(`const orig=saveText;let len=0;saveText=(n,c)=>{len=c.length};imp=blankImp('fitment');const t=performance.now();impTemplate();const d=performance.now()-t;saveText=orig;return {ms:+d.toFixed(0),MB:+(len/1048576).toFixed(1)}`);
+      res['vehicle with VIN parts'] = await js(`const v=S.vehicles.find(x=>fitOf(x.id).length);if(!v)return 'no links';const t=performance.now();go('vehicle',v.id);await new Promise(r=>requestAnimationFrame(()=>setTimeout(r)));return {ms:+(performance.now()-t).toFixed(1),parts:fitOf(v.id).length,listed:document.querySelectorAll('.card .rec').length}`);
+      fs.writeFileSync(path.join(out, 'vehicle-fitment.png'), (await win.webContents.capturePage()).toPNG());
+      res['SO with VIN recommendations'] = await js(`const o=S.sos.find(x=>x.status==='open'&&fitOf(x.vid).length);if(!o)return 'none';const t=performance.now();go('so',o.id);await new Promise(r=>requestAnimationFrame(()=>setTimeout(r)));return {ms:+(performance.now()-t).toFixed(1),vinTags:document.querySelectorAll('.tag.vin').length}`);
+      fs.writeFileSync(path.join(out, 'so-fitment.png'), (await win.webContents.capturePage()).toPNG());
       res['global-search-keystroke'] = await js(`$('#gs').value='SN000';const t=performance.now();gSearch();return +(performance.now()-t).toFixed(1)`);
       await js(`$('#gsr').hidden=true;$('#gs').value=''`);
       // A full command round trip: IPC, database, new state, re-render.

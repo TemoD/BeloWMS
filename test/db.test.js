@@ -157,15 +157,61 @@ test('catalog learns products used twice on the same model', () => {
   assert.equal(DB.exec('catalog.toggle', { model: 'Toyota Hilux', pid }), false);
 });
 
-test('CSV import checks rows and applies only valid ones', () => {
+test('CSV import: one file creates products and updates stock; empty cells leave values unchanged', () => {
   fresh();
-  const rows = [['OF-1', 'ზეთის ფილტრი', 'ცალი', '3', '', '', 'A-01-02'], ['BP-1', 'ხუნდები', 'კომპლექტი', '1', '140,5', '4', 'A-02-01'], ['', '', 'ცალი', '', 'abc', '', '']];
-  assert.deepEqual(DB.exec('import.check', { type: 'products', rows }).map(r => r.st), ['upd', 'new', 'err']);
-  assert.deepEqual(DB.exec('import.apply', { type: 'products', rows }), { n: 1, u: 1, skipped: 1 });
-  const st = DB.getState(), bp = st.products.find(p => p.art === 'BP-1');
+  const cols = r => r; // rows below are in template order: art, name, uom, min, qty, cost, loc, wh
+  const rows = [
+    cols(['OF-1', '', '', '', '20', '', 'A-01-02', '']),                     // existing: only stock and location change
+    cols(['BP-1', 'ხუნდები', 'კომპლექტი', '1', '4', '140,5', 'A-02-01', '']), // new product with stock
+    cols(['OF-1', '', '', '', '', '', '', '']),                               // duplicate for warehouse 1
+    cols(['NEW-2', '', 'ცალი', '', '1', '', '', '']),                         // new product without a name
+    cols(['OF-1', '', '', '', '3', '', '', '2'])                              // warehouse 2 is off
+  ];
+  const check = DB.exec('import.check', { type: 'products', rows });
+  assert.deepEqual(check.rows.map(r => r.st), ['upd', 'new', 'err', 'err', 'err']);
+  assert.equal(check.header, false);
+  assert.match(check.rows[0].msg, /ნაშთი 0 → 20/);
+  assert.match(check.rows[0].msg, /ლოკაცია A-01-01 → A-01-02/);
+  assert.match(check.rows[1].msg, /ახალი ლოკაცია/);
+  assert.deepEqual(DB.exec('import.apply', { type: 'products', rows }), { n: 1, u: 1, same: 0, skipped: 3 });
+  let st = DB.getState();
+  const of = st.products.find(p => p.art === 'OF-1'), bp = st.products.find(p => p.art === 'BP-1');
+  assert.deepEqual([of.name, of.min, of.stock[1].q, of.stock[1].loc], ['ზეთის ფილტრი', 2, 20, 'A-01-02'], 'blank cells kept name and minimum');
   assert.deepEqual([bp.stock[1].q, bp.cost, bp.stock[1].loc], [4, 140.5, 'A-02-01']);
-  assert.deepEqual(DB.exec('import.apply', { type: 'stock', rows: [['BP-1', '2', '', '', '1']] }), { n: 0, u: 1, skipped: 0 });
-  assert.equal(DB.getState().products.find(p => p.art === 'BP-1').stock[1].q, 2);
+  // Same file again: nothing to change.
+  assert.deepEqual(DB.exec('import.apply', { type: 'products', rows: rows.slice(0, 2) }), { n: 0, u: 0, same: 2, skipped: 0 });
+  // Second warehouse: same article on two rows is fine when the warehouse differs.
+  DB.exec('settings.set', { key: 'wh2', value: true });
+  DB.exec('location.save', { wh: 2, code: 'Z-1' });
+  const two = [['BP-1', '', '', '', '2', '', '', '1'], ['BP-1', '', '', '', '5', '', 'Z-1', '2']];
+  assert.deepEqual(DB.exec('import.apply', { type: 'products', rows: two }), { n: 0, u: 2, same: 0, skipped: 0 });
+  st = DB.getState();
+  const b2 = st.products.find(p => p.art === 'BP-1');
+  assert.deepEqual([b2.stock[1].q, b2.stock[2].q, b2.stock[2].loc], [2, 5, 'Z-1']);
+});
+
+test('CSV import recognises columns by header name, including the earlier templates', () => {
+  fresh();
+  // Earlier products template: price before quantity.
+  const oldProducts = [['არტიკული', 'დასახელება', 'ზომის ერთეული', 'მინ. ნაშთი', 'ღირებულება', 'რაოდენობა', 'ლოკაცია'], ['AF-1', 'ანტიფრიზი', 'ლიტრი', '10', '9,5', '40', 'A-01-01']];
+  const c1 = DB.exec('import.check', { type: 'products', rows: oldProducts });
+  assert.equal(c1.header, true);
+  assert.deepEqual(c1.missing, ['wh']);
+  DB.exec('import.apply', { type: 'products', rows: oldProducts });
+  let af = DB.getState().products.find(p => p.art === 'AF-1');
+  assert.deepEqual([af.stock[1].q, af.cost], [40, 9.5], 'quantity and price not swapped');
+  // Earlier opening-stock template: article, quantity, price, location, warehouse.
+  const oldStock = [['არტიკული', 'რაოდენობა', 'ღირებულება', 'ლოკაცია', 'საწყობი'], ['AF-1', '25', '', '', '1'], ['UNKNOWN-9', '5', '', '', '1']];
+  const c2 = DB.exec('import.check', { type: 'products', rows: oldStock });
+  assert.deepEqual(c2.rows.map(r => r.st), ['upd', 'err']);
+  assert.match(c2.rows[1].msg, /დასახელება/);
+  DB.exec('import.apply', { type: 'products', rows: oldStock });
+  af = DB.getState().products.find(p => p.art === 'AF-1');
+  assert.deepEqual([af.name, af.stock[1].q, af.cost], ['ანტიფრიზი', 25, 9.5]);
+  // Columns in any order with a header.
+  const shuffled = [['რაოდენობა', 'არტიკული', 'დასახელება'], ['7', 'SH-1', 'ნათურა']];
+  DB.exec('import.apply', { type: 'products', rows: shuffled });
+  assert.equal(DB.getState().products.find(p => p.art === 'SH-1').stock[1].q, 7);
 });
 
 test('company name is required to finish setup', () => {
@@ -214,5 +260,35 @@ test('VIN: 17 characters for road vehicles (no I/O/Q), 5–25 for machinery seri
   assert.throws(() => DB.exec('vehicle.save', { plate: 'Y', vin: 'A'.repeat(26), make: 'JCB', model: '3CX' }), /5–25/);
   assert.throws(() => DB.exec('vehicle.save', { plate: 'Y', vin: 'JCB 3CX 12', make: 'JCB', model: '3CX' }), /ლათინური/);
   assert.throws(() => DB.exec('vehicle.save', { plate: 'Y', vin: 'MR0HA3CD1M051234O', make: 'Toyota', model: 'Hilux' }), /I, O, Q/);
-  assert.deepEqual(DB.exec('import.check', { type: 'vehicles', rows: [['P1', 'JCBJS220LC987654321XY', 'JCB', 'JS220', '2019', '100', ''], ['P2', 'X1', 'JCB', '3CX', '', '', '']] }).map(r => r.st), ['new', 'err']);
+  assert.deepEqual(DB.exec('import.check', { type: 'vehicles', rows: [['P1', 'JCBJS220LC987654321XY', 'JCB', 'JS220', '2019', '100', ''], ['P2', 'X1', 'JCB', '3CX', '', '', '']] }).rows.map(r => r.st), ['new', 'err']);
+});
+
+test('fitment matrix: VIN rows × article columns, marks, info columns, add-only and replace', () => {
+  const { pid, vid } = fresh();
+  const p2 = DB.exec('product.save', { art: 'BP-9', name: 'ხუნდები' });
+  const v2 = DB.exec('vehicle.save', { plate: 'JC-001', vin: 'JCB3CX12345', make: 'JCB', model: '3CX' });
+  const head = ['VIN', 'სახ. ნომერი', 'მოდელი', 'OF-1', 'bp-9', 'NOT-A-PART'];
+  const rows = [head,
+    ['MR0HA3CD1M0512345', 'AA-001-AA', 'Hilux', '1', '', 'x'],
+    ['jcb3cx12345', 'JC-001', '3CX', 'x', '✓', ''],
+    ['UNKNOWNVIN999', '', '', '1', '1', ''],
+    ['JCB3CX12345', '', '', '', '', '']];
+  const c = DB.exec('import.check', { type: 'fitment', rows });
+  assert.deepEqual(c.unknown, ['NOT-A-PART']);
+  assert.equal(c.articles, 2, 'info columns are not taken as articles; article match ignores case');
+  assert.deepEqual(c.rows.map(r => r.st), ['upd', 'upd', 'err', 'err']);
+  assert.deepEqual(DB.exec('import.apply', { type: 'fitment', rows }), { n: 3, u: 2, same: 0, skipped: 2 });
+  assert.deepEqual(DB.getState().fitment, { [vid]: [pid], [v2]: [pid, p2].sort() });
+  // Add-only: an empty cell does not remove an existing link.
+  assert.deepEqual(DB.exec('import.apply', { type: 'fitment', rows: [['VIN', 'OF-1', 'BP-9'], ['JCB3CX12345', '', '1']] }), { n: 0, u: 0, same: 1, skipped: 0 });
+  // Replace: only the marked parts stay for that VIN; other VINs are untouched.
+  assert.match(DB.exec('import.check', { type: 'fitment', rows: [['VIN', 'OF-1', 'BP-9'], ['JCB3CX12345', '', '1']], replace: true }).rows[0].msg, /1 წაიშლება/);
+  DB.exec('import.apply', { type: 'fitment', rows: [['VIN', 'OF-1', 'BP-9'], ['JCB3CX12345', '', '1']], replace: true });
+  assert.deepEqual(DB.getState().fitment, { [vid]: [pid], [v2]: [p2] });
+  // Manual link from the vehicle page, and the map is only re-sent when it changed.
+  DB.getState({ delta: true });
+  assert.equal('fitment' in DB.getState({ delta: true }), false);
+  assert.equal(DB.exec('fitment.toggle', { vid: v2, pid }), true);
+  assert.deepEqual(DB.getState({ delta: true }).fitment[v2].sort(), [pid, p2].sort());
+  assert.throws(() => DB.exec('import.check', { type: 'fitment', rows: [head] }), /სათაურის/);
 });

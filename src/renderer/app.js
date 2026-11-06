@@ -64,6 +64,7 @@ function apply(st) {
     const added = [...up.values()].filter(o => !known.has(o.id));
     st.sos = added.length ? [...added, ...merged].sort((a, b) => a.date < b.date ? 1 : a.date > b.date ? -1 : a.id < b.id ? 1 : a.id > b.id ? -1 : 0) : merged;
   }
+  if (!st.fitment) st.fitment = S ? S.fitment : {};
   delete st.sosUpsert;
   S = st; TODAY = st.today;
 }
@@ -122,6 +123,16 @@ function catEntries(model, excludeSO) {
   const own = excludeSO && SO(excludeSO) ? usedPids(SO(excludeSO)) : null;
   return [...mm.values()].map(e => own && own.has(e.pid) ? { ...e, hist: e.hist - 1 } : e)
     .filter(e => (e.manual || e.hist > 0) && P(e.pid)).sort((a, b) => (b.manual - a.manual) || (b.hist - a.hist));
+}
+// Parts linked to one exact vehicle (VIN), e.g. from the fitment matrix import.
+const fitOf = vid => (S.fitment && S.fitment[vid]) || [];
+const fitsVin = (vid, pid) => fitOf(vid).includes(pid);
+// Recommendations for a service order: the VIN's own parts first, then the model catalog and history.
+function recsFor(o, v) {
+  const m = modelKey(v), own = fitOf(v.id).filter(pid => P(pid));
+  const ownSet = new Set(own);
+  return [...own.map(pid => ({ pid, vin: true, manual: !!catEntry(m, pid)?.manual, hist: catEntry(m, pid)?.hist || 0 })),
+    ...catEntries(m, o.id).filter(e => !ownSet.has(e.pid))];
 }
 const catEntry = (model, pid) => { const e = catIndex().get(model)?.get(pid); return e && (e.manual || e.hist > 0) ? e : null; };
 const inCatalog = (model, pid) => !!catEntry(model, pid);
@@ -267,12 +278,10 @@ function gSearch() {
 VIEWS.dashboard = () => {
   const val = S.products.reduce((a, p) => a + totQ(p) * p.cost, 0), open = S.sos.filter(o => o.status === 'open'), low = S.products.filter(isLow);
   const ym = TODAY.slice(0, 7), mc = S.sos.filter(o => o.date.startsWith(ym)).reduce((a, o) => a + soCost(o), 0);
-  const hasStock = S.products.some(p => totQ(p) > 0);
   const steps = [
     [S.locations.length > 0, 'ლოკაციების სია', "go('stock')", 'თაროები, ზონები — ან შეიქმნება CSV იმპორტისას'],
-    [S.products.length > 0, 'პროდუქტების იმპორტი CSV-დან', "openImport('products')", 'ან დაამატეთ ხელით „პროდუქტები“ გვერდზე'],
+    [S.products.length > 0, 'პროდუქტების და ნაშთის იმპორტი CSV-დან', "openImport('products')", 'რაოდენობა, ფასი, ლოკაცია — ერთ ფაილში; ან ხელით „პროდუქტები“ გვერდზე'],
     [S.vehicles.length > 0, 'ტექნიკის იმპორტი CSV-დან', "openImport('vehicles')", 'ან დაამატეთ ხელით „ტექნიკის რეესტრში“'],
-    [hasStock, 'საწყისი ნაშთის ჩატვირთვა', "openImport('stock')", 'არსებული ნაშთი, ღირებულება, ლოკაცია'],
     [!!S.settings.backupDir, 'სარეზერვო საქაღალდის არჩევა (USB / SSD)', 'chooseBackupDir()', 'ასლი ავტომატურად იქმნება პროგრამის დახურვისას']
   ];
   const start = steps.some(s => !s[0]) ? `<div class="card"><header><h3>${ic('spark')} დაწყება</h3><span class="sub">${steps.filter(s => s[0]).length} / ${steps.length}</span></header><div class="steps">
@@ -358,7 +367,7 @@ VIEWS.so = id => {
   const o = SO(id);
   if (!o) return VIEWS.sos();
   const v = V(o.vid), closed = o.status !== 'open', m = modelKey(v), wh2 = S.settings.wh2;
-  const recs = catEntries(m, o.id).slice(0, 8), inOrder = new Set(o.parts.map(l => l.pid)), dl = daysLeft(o);
+  const recAll = recsFor(o, v), recs = recAll.slice(0, 12), inOrder = new Set(o.parts.map(l => l.pid)), dl = daysLeft(o);
   const state = o.status === 'open'
     ? `<div class="note info">${ic('clock')}<div>ორდერი ღიაა. ბოლო ცვლილება: <b>${fmtD(autoBase(o))}</b>. ავტომატურად დაიხურება <b>${dl <= 0 ? 'დღეს' : dl + ' დღეში'}</b> (${fmtD(addDays(autoBase(o), S.settings.autoClose))}), თუ ახალი ცვლილება არ შევა.</div></div>`
     : `<div class="note ${o.status === 'auto' ? 'warn' : ''}">${ic('lock')}<div>${o.status === 'auto' ? 'ორდერი <b>ავტომატურად დაიხურა</b>' : 'ორდერი <b>ხელით დაიხურა</b>'} ${fmtD(o.closedAt)}. ცვლილებისთვის გახსენით ხელახლა.</div></div>`;
@@ -387,8 +396,9 @@ VIEWS.so = id => {
    </div>
    <div>
     ${S.settings.catalogRec ? `<div class="card"><header><h3>${ic('spark')} რეკომენდაცია კატალოგიდან</h3></header>
-     <div class="body" style="padding-bottom:4px"><div class="sub" style="margin-bottom:8px">მოდელისთვის <b style="color:var(--ink)">${esc(m)}</b>. რეკომენდაციაა და არა შეზღუდვა — შეგიძლიათ ნებისმიერი პროდუქტის გაცემა.</div></div>
-     ${recs.map(r => { const p = P(r.pid); return `<div class="rec"><div class="n"><div>${esc(p.name)}</div><div class="sub"><span class="mono">${esc(p.art)}</span> · ნაშთი ${qfmt(totQ(p))} ${esc(p.uom)} · ${ic('pin')} ${esc(p.stock[1].loc || '—')}</div><div style="margin-top:3px">${r.manual ? '<span class="tag man">კატალოგი</span> ' : ''}${r.hist ? `<span class="tag hist">ისტორია · ${r.hist}×</span>` : ''}</div></div>${inOrder.has(p.id) ? '<span class="badge b-ok">დამატებულია</span>' : closed ? '' : btn('გაცემა', `addPart('${o.id}','${p.id}')`, 'sm', 'plus')}</div>`; }).join('') || '<div class="empty">ამ მოდელზე კატალოგი ჯერ ცარიელია. გაცემული ნაწილები ავტომატურად შეივსება.</div>'}
+     <div class="body" style="padding-bottom:4px"><div class="sub" style="margin-bottom:8px">ამ VIN-ის და მოდელის <b style="color:var(--ink)">${esc(m)}</b> მიხედვით. რეკომენდაციაა და არა შეზღუდვა — შეგიძლიათ ნებისმიერი პროდუქტის გაცემა.</div></div>
+     ${recs.map(r => { const p = P(r.pid); return `<div class="rec"><div class="n"><div>${esc(p.name)}</div><div class="sub"><span class="mono">${esc(p.art)}</span> · ნაშთი ${qfmt(totQ(p))} ${esc(p.uom)} · ${ic('pin')} ${esc(p.stock[1].loc || '—')}</div><div style="margin-top:3px">${r.vin ? '<span class="tag vin">VIN</span> ' : ''}${r.manual ? '<span class="tag man">კატალოგი</span> ' : ''}${r.hist ? `<span class="tag hist">ისტორია · ${r.hist}×</span>` : ''}</div></div>${inOrder.has(p.id) ? '<span class="badge b-ok">დამატებულია</span>' : closed ? '' : btn('გაცემა', `addPart('${o.id}','${p.id}')`, 'sm', 'plus')}</div>`; }).join('') || '<div class="empty">ამ ტექნიკაზე კავშირი ჯერ არ არის. მიაბით ნაწილები VIN-ზე (ტექნიკის გვერდი ან CSV) — ან შეივსება ისტორიიდან.</div>'}
+     ${recAll.length > recs.length ? `<div class="rec"><a class="link" onclick="go('vehicle','${v.id}')">+${recAll.length - recs.length} სხვა ნაწილი — ტექნიკის გვერდზე</a></div>` : ''}
     </div>` : ''}
     <div class="card"><header><h3>ჯამი</h3></header><div class="totals">
       <div><span>ნაწილები</span><span>${money(partsCost(o))}</span></div>
@@ -402,7 +412,7 @@ function soWarn(oid) {
   if (!p) { w.innerHTML = ''; return; }
   const wh = +($('#sowh')?.value || 1), q = +$('#soqty').value || 0, avail = p.stock[wh].q;
   let h = '';
-  if (S.settings.catalogRec && !inCatalog(m, p.id)) h += `<div class="note warn" style="margin:10px 0">${ic('info')}<div><b>${esc(p.name)}</b> კატალოგში არ არის მიბმული მოდელზე ${esc(m)}. გაცემა მაინც შესაძლებელია — კავშირი ისტორიიდან აისახება კატალოგში.</div></div>`;
+  if (S.settings.catalogRec && !inCatalog(m, p.id) && !fitsVin(o.vid, p.id)) h += `<div class="note warn" style="margin:10px 0">${ic('info')}<div><b>${esc(p.name)}</b> კატალოგში არ არის მიბმული მოდელზე ${esc(m)}. გაცემა მაინც შესაძლებელია — კავშირი ისტორიიდან აისახება კატალოგში.</div></div>`;
   if (q > avail) h += `<div class="note" style="margin:10px 0;background:var(--bad-bg);color:var(--bad)">${ic('alert')}<div>ნაშთი არასაკმარისია: ხელმისაწვდომია ${qfmt(avail)} ${esc(p.uom)}. უარყოფითი ნაშთი დაუშვებელია.</div></div>`;
   h += `<div class="sub" style="margin:${h ? '0' : '10px'} 0 12px">ნაშთი: <b>${qfmt(avail)} ${esc(p.uom)}</b> · ლოკაცია ${esc(p.stock[wh].loc || '—')} · საშ. ფასი ${money(p.cost)}</div>`;
   w.innerHTML = h;
@@ -538,7 +548,7 @@ function openProduct(id, fromPO = false) {
     <div class="field"><label>საშ. ღირებულება</label><input id="pc" type="number" min="0" step="any" value="${p ? Math.round(p.cost * 100) / 100 : ''}" ${p ? 'disabled' : ''} placeholder="₾"><span class="hint">${p ? 'ითვლება შესყიდვებიდან' : 'საწყისი, თუ ცნობილია'}</span></div>
    </div>
    <div class="grid2">${whs().map(w => `<div class="field"><label>${ic('pin')} ლოკაცია — ${esc(S.wh[w])}</label><input id="pl${w}" class="mono" list="dlloc${w}" autocomplete="off" value="${esc(p ? p.stock[w].loc : '')}" placeholder="${locsOf(w, true).length ? 'აირჩიეთ სიიდან' : 'ჯერ დაამატეთ ლოკაციები'}"><span class="hint">ლოკაციების სიიდან${p ? ` · ნაშთი ${qfmt(p.stock[w].q)} ${esc(p.uom)}` : ''}</span></div>`).join('')}</div>
-   ${p ? `<div class="field"><label>რომელ ტექნიკაზე ყენდება (კატალოგი)</label><div class="chips">${fits.map(m => `<span class="chip">${ic('car')}${esc(m)}</span>`).join('') || '<span class="sub">ჯერ არ არის მიბმული</span>'}</div></div>
+   ${p ? `<div class="field"><label>რომელ ტექნიკაზე ყენდება (კატალოგი)</label><div class="chips">${fits.map(m => `<span class="chip">${ic('car')}${esc(m)}</span>`).join('') || '<span class="sub">მოდელზე არ არის მიბმული</span>'}${(() => { const n = Object.values(S.fitment || {}).filter(a => a.includes(p.id)).length; return n ? `<span class="chip">${ic('car')}VIN-ით: ${n} ტექნიკა</span>` : ''; })()}</div></div>
    <div class="field"><label>ბოლო მოძრაობები</label>${mv.length ? `<table class="t" style="border:1px solid var(--line)">${mv.map(m => `<tr><td>${fmtD(m.date)}</td><td>${(MOVE_T[m.type] || [m.type])[0]}</td><td class="mono">${esc(m.ref)}</td><td class="num">${moveSign(m.type)}${qfmt(m.qty)} ${esc(p.uom)}</td></tr>`).join('')}</table>` : '<span class="sub">მოძრაობა არ არის</span>'}</div>` : ''}`,
   (p && S.settings.wh2 ? btn('გადაადგილება', `openTransfer('${p.id}')`, 'ghost', 'swap') : '') + btn('გაუქმება', fromPO ? 'reopenPO()' : 'closeModal()') + btn('შენახვა', `saveProduct(${p ? `'${p.id}'` : 'null'},${fromPO})`, 'primary', 'check'));
 }
@@ -702,9 +712,21 @@ VIEWS.vehicle = id => {
    <div class="card"><header><h3>სერვისის ისტორია</h3></header><div class="tw"><table class="t"><thead><tr><th>№</th><th>თარიღი</th><th class="num">გარბენი</th><th>ნაწილები / მომსახურება</th><th class="num">ჯამი</th><th>სტატუსი</th></tr></thead><tbody>
    ${os.map(o => `<tr class="click" onclick="go('so','${o.id}')"><td class="mono">${o.id}</td><td>${fmtD(o.date)}</td><td class="num">${qfmt(o.km)}</td><td class="sub" style="max-width:280px">${[...o.parts.map(l => P(l.pid).name), ...o.svcs.map(s => s.name)].map(esc).join(', ') || '—'}</td><td class="num"><b>${money(soCost(o))}</b></td><td>${statusBadge(o)}</td></tr>`).join('') || emptyRow(6, 'ისტორია ცარიელია')}
    </tbody></table></div></div>
+   <div>
+   <div class="card"><header><h3>${ic('book')} შესაფერისი ნაწილები (VIN)</h3><span class="sub">${fitOf(v.id).length}</span></header>
+    ${fitOf(v.id).map(pid => { const p = P(pid); return p ? `<div class="rec"><div class="n"><div>${esc(p.name)}</div><div class="sub"><span class="mono">${esc(p.art)}</span> · ნაშთი ${qfmt(totQ(p))} ${esc(p.uom)} · ${ic('pin')} ${esc(p.stock[1].loc || '—')}</div></div>${btn('', `call('fitment.toggle',{vid:'${v.id}',pid:'${p.id}'},'კავშირი მოიხსნა')`, 'sm ghost danger', 'x')}</div>` : ''; }).join('') || '<div class="empty">ნაწილი ჯერ არ არის მიბმული — დაამატეთ ქვემოთ ან CSV მატრიცით</div>'}
+    <div class="addrow"><input id="fitp" list="dlp" class="grow" placeholder="არტიკული ან დასახელება…" autocomplete="off">${btn('მიბმა', `addFit('${v.id}')`, '', 'plus')}</div>
+   </div>
    <div class="card"><header><h3>ყველაზე ხარჯიანი ნაწილები</h3></header>${top.map(([pid, a]) => { const p = P(pid); return `<div class="rec"><div class="n"><div>${esc(p.name)}</div><div class="sub">${qfmt(a.q)} ${esc(p.uom)}</div></div><b>${money(a.c)}</b></div>`; }).join('') || '<div class="empty">—</div>'}</div>
+   </div>
   </div>`;
 };
+async function addFit(vid) {
+  const p = findProduct($('#fitp').value);
+  if (!p) return toast('აირჩიეთ პროდუქტი სიიდან', 'err');
+  if (fitsVin(vid, p.id)) return toast('ეს ნაწილი უკვე მიბმულია', 'info');
+  await call('fitment.toggle', { vid, pid: p.id }, `მიება: ${p.name}`);
+}
 
 /* ================= catalog ================= */
 let catModel = 'all', catQ = '';
@@ -877,11 +899,13 @@ async function doRestore(file) {
 
 /* ================= CSV import ================= */
 const IMP = {
-  products: { t: 'პროდუქტები', d: 'არტიკული, დასახელება, ერთეული, მინ. ნაშთი, ღირებულება, რაოდენობა, ლოკაცია', cols: ['არტიკული', 'დასახელება', 'ზომის ერთეული', 'მინ. ნაშთი', 'ღირებულება', 'რაოდენობა', 'ლოკაცია'] },
+  products: { t: 'პროდუქტები და ნაშთი', d: 'ახალი პროდუქტები და არსებულის განახლება: დასახელება, ერთეული, მინ. ნაშთი, რაოდენობა, ფასი, ლოკაცია, საწყობი', cols: ['არტიკული', 'დასახელება', 'ზომის ერთეული', 'მინ. ნაშთი', 'რაოდენობა', 'ღირებულება', 'ლოკაცია', 'საწყობი'] },
   vehicles: { t: 'ტექნიკა', d: 'სახ. ნომერი, VIN, მარკა, მოდელი, წელი, გარბენი, განყოფილება', cols: ['სახ. ნომერი', 'VIN', 'მარკა', 'მოდელი', 'წელი', 'გარბენი', 'განყოფილება'] },
-  stock: { t: 'საწყისი ნაშთი', d: 'არსებული პროდუქტების ნაშთი, ღირებულება და ლოკაცია (ჩანაცვლება)', cols: ['არტიკული', 'რაოდენობა', 'ღირებულება', 'ლოკაცია', 'საწყობი'] }
+  fitment: { t: 'შესაბამისობა (VIN × არტიკული)', d: 'რომელი ნაწილი რომელ ტექნიკაზე ყენდება: სტრიქონი = VIN, სვეტი = არტიკული, ნიშანი 1 / x / ✓', cols: ['VIN', 'ტექნიკა', 'ნაწილი'] }
 };
-let imp = { type: 'products', rows: [], checked: [], name: '' };
+const blankImp = type => ({ type, rows: [], checked: [], name: '', header: false, missing: [], replace: false, unknown: [], articles: 0 });
+let imp = blankImp('products');
+const IMP_ST = { new: ['ახალი', 'b-ok'], upd: ['განახლდება', 'b-open'], same: ['უცვლელი', 'b-closed'], err: ['შეცდომა', 'b-low'] };
 function parseCSV(text) {
   text = text.replace(/^﻿/, '');
   const first = text.split(/\r?\n/)[0], d = (first.match(/;/g) || []).length >= (first.match(/,/g) || []).length ? ';' : ',';
@@ -898,34 +922,47 @@ function parseCSV(text) {
   return rows.filter(r => r.some(x => x.trim() !== '')).map(r => r.map(x => x.trim()));
 }
 function openImport(type = 'products') {
-  imp = { type, rows: [], checked: [], name: '' };
+  if (!IMP[type]) type = 'products';
+  imp = blankImp(type);
   openModal('CSV იმპორტი', '<div id="impb"></div>', '<span class="left" id="impsum"></span>' + btn('გაუქმება', 'closeModal()') + `<button class="btn primary" id="impgo" onclick="doImport()" disabled>${ic('check')}იმპორტი</button>`, true);
   impRender();
 }
 function impRender() {
   const d = IMP[imp.type], ch = imp.checked;
-  const n = ch.filter(r => r.st === 'new').length, u = ch.filter(r => r.st === 'upd').length, e = ch.filter(r => r.st === 'err').length;
-  $('#impb').innerHTML = `<div class="filters"><div class="seg">${Object.entries(IMP).map(([k, x]) => `<button class="${imp.type === k ? 'on' : ''}" onclick="imp={type:'${k}',rows:[],checked:[],name:''};impRender()">${x.t}</button>`).join('')}</div></div>
+  const cnt = k => ch.filter(r => r.st === k).length, n = cnt('new'), u = cnt('upd'), same = cnt('same'), e = cnt('err');
+  $('#impb').innerHTML = `<div class="filters"><div class="seg">${Object.entries(IMP).map(([k, x]) => `<button class="${imp.type === k ? 'on' : ''}" onclick="imp=blankImp('${k}');impRender()">${x.t}</button>`).join('')}</div></div>
    <div class="drop" ondragover="event.preventDefault()" ondrop="event.preventDefault();impFile(event.dataTransfer.files[0])">${ic('upload')}
     <div><b>აირჩიეთ ან ჩააგდეთ CSV ფაილი</b><div class="sub">Excel-ში: ფაილი → შენახვა როგორც → „CSV UTF-8“. გამყოფი „;“ ან „,“ — ავტომატურად ცნობს. პირველი სტრიქონი შეიძლება იყოს სათაური.</div></div>
     <label class="btn">ფაილის არჩევა<input type="file" accept=".csv,text/csv" hidden onchange="impFile(this.files[0])"></label>
     ${btn('შაბლონი', 'impTemplate()', 'ghost', 'download')}</div>
-   <div class="sub" style="margin:10px 0 12px">სვეტების თანმიმდევრობა: ${d.cols.map(c => `<span class="tag">${c}</span>`).join(' ')}</div>
+   ${imp.type === 'fitment' ? `<div class="sub" style="margin:10px 0 6px">ფაილი: <b>პირველი სვეტი VIN</b>, დანარჩენი სვეტების სათაური — <b>არტიკული</b>; უჯრაში <b>1 / x / ✓ / +</b> ნიშნავს, რომ ნაწილი ამ ტექნიკაზე ყენდება. სვეტები „სახ. ნომერი“, „მოდელი“ დასაშვებია და იგნორირდება. „შაბლონი“ ჩამოტვირთავს მატრიცას ყველა ტექნიკით და არტიკულით, არსებული კავშირები მონიშნულია.</div>
+   <label style="display:flex;gap:8px;align-items:center;cursor:pointer;margin:0 0 10px;font-size:13px"><input type="checkbox" ${imp.replace ? 'checked' : ''} onchange="imp.replace=this.checked;impRecheck()"><span><b>ჩანაცვლება</b> — ფაილში მოცემულ VIN-ებზე ძველი კავშირები წაიშლება და დარჩება მხოლოდ ფაილში მონიშნული (გამორთულია: მხოლოდ დამატება)</span></label>
+   ${imp.unknown.length ? `<div class="note warn">${ic('alert')}<div>${imp.unknown.length} არტიკული სვეტი ვერ მოიძებნა პროდუქტებში და გამოტოვდება: <span class="mono">${imp.unknown.slice(0, 12).map(esc).join(', ')}${imp.unknown.length > 12 ? ' …' : ''}</span></div></div>` : ''}
+   ${ch.length ? `<div class="sub" style="margin:0 0 12px">ამოცნობილი არტიკული სვეტები: <b>${imp.articles}</b></div>` : ''}` : `<div class="sub" style="margin:10px 0 4px">სვეტები: ${d.cols.map(c => `<span class="tag">${c}</span>`).join(' ')}</div>
+   <div class="sub" style="margin:0 0 12px">${imp.type === 'products' ? 'არსებულ პროდუქტზე <b>ცარიელი უჯრა = არ შეიცვალოს</b>; შევსებული რაოდენობა ჩაანაცვლებს ნაშთს. საწყობი: 1 ან 2 (ცარიელი = 1). ' : ''}${ch.length ? (imp.header ? 'სვეტები ამოცნობილია სათაურით' + (imp.missing.length ? ' · ფაილში არ არის: ' + imp.missing.map(k => d.cols[IMP_KEYS[imp.type].indexOf(k)]).join(', ') : '') : 'სათაური არ არის — სვეტები თანმიმდევრობით') : 'სათაურის სტრიქონი რეკომენდებულია: სვეტებს სახელით ვცნობთ, მიმდევრობა არ არის მნიშვნელოვანი.'}</div>`}
    ${ch.length ? `<div class="tw" style="max-height:340px;border:1px solid var(--line);border-radius:8px"><table class="t"><thead><tr><th>#</th>${d.cols.map(c => `<th>${c}</th>`).join('')}<th>სტატუსი</th></tr></thead><tbody>
-    ${ch.slice(0, 300).map((r, i) => `<tr class="${r.st}"><td class="sub">${i + 1}</td>${r.c.map(x => `<td>${esc(x) || '<span class="sub">—</span>'}</td>`).join('')}<td>${r.st === 'new' ? '<span class="badge b-ok">ახალი</span>' : r.st === 'upd' ? '<span class="badge b-open">განახლდება</span>' : `<span class="badge b-low">შეცდომა</span><div class="sub" style="color:var(--bad)">${esc(r.msg)}</div>`}${r.st !== 'err' && r.msg ? `<div class="sub">${esc(r.msg)}</div>` : ''}</td></tr>`).join('')}
+    ${ch.slice(0, 300).map((r, i) => `<tr class="${r.st}"><td class="sub">${i + 1}</td>${r.c.map(x => `<td>${esc(x) || '<span class="sub">—</span>'}</td>`).join('')}<td><span class="badge ${IMP_ST[r.st][1]}">${IMP_ST[r.st][0]}</span>${r.msg ? `<div class="sub" style="${r.st === 'err' ? 'color:var(--bad)' : ''}">${esc(r.msg)}</div>` : ''}</td></tr>`).join('')}
    </tbody></table></div>${ch.length > 300 ? `<div class="sub" style="margin-top:6px">ნაჩვენებია პირველი 300 სტრიქონი ${ch.length}-დან</div>` : ''}` : ''}`;
-  $('#impsum').textContent = ch.length ? `${imp.name}: ${n} ახალი · ${u} განახლდება · ${e} შეცდომა (გამოტოვდება)` : '';
+  $('#impsum').textContent = !ch.length ? '' : imp.type === 'fitment' ? `${imp.name}: ${u} ტექნიკა განახლდება · ${same} უცვლელი · ${e} შეცდომა (გამოტოვდება)` : `${imp.name}: ${n} ახალი · ${u} განახლდება · ${same} უცვლელი · ${e} შეცდომა (გამოტოვდება)`;
   $('#impgo').disabled = !(n + u);
 }
 async function impParse(text, name) {
-  const d = IMP[imp.type];
-  let rows = parseCSV(text);
-  if (rows.length && norm(rows[0][0]) === norm(d.cols[0])) rows = rows.slice(1);
+  // The header row (if any) is recognised in db.js, so the raw rows are sent as they are.
+  const rows = parseCSV(text);
   if (!rows.length) return toast('ფაილი ცარიელია', 'err');
-  if (rows.length > 10000) return toast('მაქსიმუმ 10 000 სტრიქონი ერთ ფაილში', 'err');
-  const r = await window.api.invoke('cmd', 'import.check', { type: imp.type, rows });
+  if (rows.length > 10001) return toast('მაქსიმუმ 10 000 სტრიქონი ერთ ფაილში', 'err');
+  const r = await window.api.invoke('cmd', 'import.check', { type: imp.type, rows, replace: imp.replace });
   if (!r.ok) return toast(r.error, 'err');
-  imp.rows = rows; imp.checked = r.result; imp.name = name;
+  if (!r.result.rows.length) return toast('ფაილში მხოლოდ სათაურია', 'err');
+  Object.assign(imp, { rows, checked: r.result.rows, header: r.result.header, missing: r.result.missing, unknown: r.result.unknown || [], articles: r.result.articles || 0, name });
+  impRender();
+}
+// The replace option changes what each row would do, so the preview is checked again.
+async function impRecheck() {
+  if (!imp.rows.length) return impRender();
+  const r = await window.api.invoke('cmd', 'import.check', { type: imp.type, rows: imp.rows, replace: imp.replace });
+  if (!r.ok) return toast(r.error, 'err');
+  imp.checked = r.result.rows;
   impRender();
 }
 function impFile(f) {
@@ -935,13 +972,25 @@ function impFile(f) {
   r.onload = () => impParse(r.result, f.name);
   r.readAsText(f, 'UTF-8');
 }
-function impTemplate() { saveText(`AxiomaWMS_${imp.type}_შაბლონი.csv`, IMP[imp.type].cols.join(';') + '\r\n'); }
+// Column keys in db.js order (IMPORT_COLS), used to name columns missing from a file's header.
+const IMP_KEYS = { products: ['art', 'name', 'uom', 'min', 'qty', 'cost', 'loc', 'wh'], vehicles: ['plate', 'vin', 'make', 'model', 'year', 'km', 'dept'] };
+const IMP_FILE = { products: 'პროდუქტები_და_ნაშთი', vehicles: 'ტექნიკა', fitment: 'შესაბამისობა_VIN' };
+function impTemplate() {
+  if (imp.type !== 'fitment') return saveText(`AxiomaWMS_${IMP_FILE[imp.type]}_შაბლონი.csv`, IMP[imp.type].cols.join(';') + '\r\n');
+  // Pre-filled matrix: every vehicle × every article, current links marked with 1.
+  const arts = S.products.map(p => p.art), pidOf = S.products.map(p => p.id);
+  const lines = [['VIN', 'სახ. ნომერი', 'მოდელი', ...arts].map(csvCell).join(';')];
+  S.vehicles.forEach(v => { const own = new Set(fitOf(v.id)); lines.push([v.vin, v.plate, modelKey(v), ...pidOf.map(pid => own.has(pid) ? '1' : '')].map(csvCell).join(';')); });
+  if (!S.vehicles.length) toast('ტექნიკა ჯერ არ არის — შაბლონში მხოლოდ სათაური იქნება', 'info');
+  saveText(`AxiomaWMS_${IMP_FILE.fitment}_${TODAY}.csv`, lines.join('\r\n') + '\r\n');
+}
 async function doImport() {
   const b = $('#impgo'); b.disabled = true;
-  const res = await call('import.apply', { type: imp.type, rows: imp.rows });
+  const res = await call('import.apply', { type: imp.type, rows: imp.rows, replace: imp.replace });
   if (!res) { b.disabled = false; return; }
   closeModal();
-  toast(`იმპორტი დასრულდა: ${res.n} ახალი, ${res.u} განახლდა${res.skipped ? ', ' + res.skipped + ' გამოტოვდა' : ''}`);
+  if (imp.type === 'fitment') return toast(`შესაბამისობა: ${res.n} ახალი კავშირი, ${res.u} ტექნიკა განახლდა${res.skipped ? ', ' + res.skipped + ' სტრიქონი გამოტოვდა' : ''}`);
+  toast(`იმპორტი დასრულდა: ${res.n} ახალი, ${res.u} განახლდა${res.same ? ', ' + res.same + ' უცვლელი' : ''}${res.skipped ? ', ' + res.skipped + ' გამოტოვდა' : ''}`);
 }
 
 /* ================= service order PDF ================= */

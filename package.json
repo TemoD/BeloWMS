@@ -1,7 +1,7 @@
 {
   "name": "axioma-wms",
   "productName": "Axioma WMS",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Axioma WMS — Workshop Management System",
   "main": "src/main/main.js",
   "private": true,

@@ -53,6 +53,10 @@ CREATE TABLE locations(wh_id INTEGER NOT NULL REFERENCES warehouses(id), code TE
 INSERT OR IGNORE INTO locations(wh_id, code) SELECT DISTINCT wh_id, loc FROM stock WHERE loc <> '';
 ALTER TABLE so_parts ADD COLUMN serials TEXT NOT NULL DEFAULT '[]';
 ALTER TABLE so_parts ADD COLUMN ret_serials TEXT NOT NULL DEFAULT '[]';
+`, `
+CREATE TABLE fitment(vehicle_id TEXT NOT NULL REFERENCES vehicles(id), product_id TEXT NOT NULL REFERENCES products(id),
+  PRIMARY KEY(vehicle_id, product_id));
+CREATE INDEX ix_fitment_product ON fitment(product_id);
 `];
 
 /* ---------- low-level helpers ---------- */
@@ -74,7 +78,7 @@ function open(file) {
   MIGRATIONS.slice(v).forEach((sql, i) => tx(() => { db.exec(sql); run("INSERT OR REPLACE INTO meta VALUES('schema',?)", String(v + i + 1)); }));
   return db;
 }
-function close() { if (db) { db.close(); db = null; } soCache = null; pendingSO.clear(); }
+function close() { if (db) { db.close(); db = null; } soCache = null; pendingSO.clear(); fitSent = -1; }
 const handle = () => db;
 
 function setting(k) { return get('SELECT value FROM settings WHERE key=?', k)?.value ?? null; }
@@ -177,6 +181,13 @@ function autoClose() {
 // Service orders are most of the state, so they are cached and only the ones a command touched are rebuilt.
 let soCache = null;            // Map id → service order as the screen sees it
 const pendingSO = new Set();   // ids changed since the last getState
+// Per-VIN fitment can be large, so it is sent only on a full state or after it changed (fitVer).
+let fitVer = 0, fitSent = -1;
+function fitmentMap() {
+  const m = {};
+  all('SELECT vehicle_id, product_id FROM fitment ORDER BY vehicle_id, product_id').forEach(r => { (m[r.vehicle_id] ??= []).push(r.product_id); });
+  return m;
+}
 function soObject(o, parts, svcs) {
   return {
     id: o.id, date: o.date, vid: o.vehicle_id, resp: o.resp, km: o.km, status: o.status, closedAt: o.closed_at, lastChange: o.last_change,
@@ -233,32 +244,73 @@ function getState({ delta = false } = {}) {
   else st.sos = [...soCache.values()].sort(soOrder);
   st.locations = all('SELECT wh_id AS wh, code, note, active FROM locations').map(r => ({ ...r, active: !!r.active }));
   st.catalog = all('SELECT model, product_id AS pid FROM catalog').map(r => ({ ...r }));
+  if (!delta || fitSent !== fitVer) { st.fitment = fitmentMap(); fitSent = fitVer; }
   st.moves = all('SELECT date,type,ref,product_id AS pid,qty,wh_id AS wh,to_wh AS "to",note FROM moves ORDER BY id DESC LIMIT 500').map(r => ({ ...r }));
   st.transfers = all('SELECT id,date,product_id AS pid,from_wh AS "from",to_wh AS "to",qty FROM transfers ORDER BY rowid DESC LIMIT 50').map(r => ({ ...r }));
   return st;
 }
 
 /* ---------- CSV import rules (used for the preview and again when applying) ---------- */
+// One file for products and their stock, one for vehicles.
 const IMPORT_COLS = {
-  products: ['art', 'name', 'uom', 'min', 'cost', 'qty', 'loc'],
-  vehicles: ['plate', 'vin', 'make', 'model', 'year', 'km', 'dept'],
-  stock: ['art', 'qty', 'cost', 'loc', 'wh']
+  products: ['art', 'name', 'uom', 'min', 'qty', 'cost', 'loc', 'wh'],
+  vehicles: ['plate', 'vin', 'make', 'model', 'year', 'km', 'dept']
 };
+// Header names recognised for each column, including the earlier templates (separate products and opening-stock
+// files with price before quantity), so columns are matched by name rather than position when a header row exists.
+const HEADERS = {
+  art: ['არტიკული', 'კოდი', 'article', 'art', 'sku'], name: ['დასახელება', 'სახელი', 'name'],
+  uom: ['ზომის ერთეული', 'ერთეული', 'uom', 'unit'], min: ['მინ. ნაშთი', 'მინიმალური ნაშთი', 'min'],
+  qty: ['რაოდენობა', 'ნაშთი', 'qty', 'quantity'], cost: ['ღირებულება', 'ფასი', 'საშ. ღირებულება', 'cost', 'price'],
+  loc: ['ლოკაცია', 'location'], wh: ['საწყობი', 'warehouse'],
+  plate: ['სახ. ნომერი', 'სახელმწიფო ნომერი', 'plate'], vin: ['vin', 'vin კოდი', 'vin / სერიული №', 'სერიული №', 'serial'],
+  make: ['მარკა', 'make'], model: ['მოდელი', 'model'], year: ['წელი', 'year'], km: ['გარბენი', 'km', 'mileage'], dept: ['განყოფილება', 'department']
+};
+const hnorm = v => String(v ?? '').toLowerCase().replace(/[\s.\-_/№]+/g, '');
+// Puts each row's cells in IMPORT_COLS order. A first row with at least two known header names is used as the header.
+function importRows(type, rows) {
+  const cols = IMPORT_COLS[type] || fail('უცნობი იმპორტის ტიპი');
+  if (!rows.length) return { rows: [], header: false, missing: [] };
+  const first = rows[0].map(hnorm);
+  const idx = cols.map(c => first.findIndex(h => h && HEADERS[c].some(x => hnorm(x) === h)));
+  if (idx.filter(i => i >= 0).length < 2) return { rows: rows.map(r => cols.map((_, i) => str(r[i]))), header: false, missing: [] };
+  return { rows: rows.slice(1).map(r => idx.map(i => (i >= 0 ? str(r[i]) : ''))), header: true, missing: cols.filter((_, k) => idx[k] < 0) };
+}
 const okNum = (v, min = 0) => str(v) === '' || num(v) >= min;
+const r2 = n => Math.round(n * 100) / 100;
+// st: new | upd (changes listed in msg) | same (nothing to change) | err (reason in msg).
 function importCheck(type, rows) {
   const seen = new Set();
-  return rows.map(raw => {
-    const c = IMPORT_COLS[type].map((_, i) => str(raw[i]));
-    const e = []; let st = 'new';
+  return rows.map(c => {
+    const e = [], ch = [];
+    let st = 'new';
     if (type === 'products') {
-      const [art, name, uom, min, cost, qty, loc] = c;
+      // An empty cell on an existing product means "leave unchanged".
+      const [art, name, uom, min, qty, cost, loc, wh] = c;
+      const w = wh === '' ? 1 : +wh;
       if (!art) e.push('არტიკული ცარიელია');
-      if (!name) e.push('დასახელება ცარიელია');
+      if (w !== 1 && w !== 2) e.push('საწყობი: 1 ან 2');
+      else if (w === 2 && setting('wh2') !== '1') e.push('მეორე საწყობი გამორთულია');
       if (uom && !get('SELECT 1 FROM uoms WHERE name=?', uom)) e.push(`უცნობი ერთეული „${uom}“`);
-      if (![min, cost, qty].every(v => okNum(v))) e.push('რიცხვი არასწორია');
-      if (art && seen.has(art.toUpperCase())) e.push('არტიკული მეორდება ფაილში');
-      seen.add(art.toUpperCase());
-      if (art && get('SELECT 1 FROM products WHERE art=?', art)) st = 'upd';
+      if (![min, qty, cost].every(v => okNum(v))) e.push('რიცხვი არასწორია');
+      const key = art.toUpperCase() + '|' + w;
+      if (art && seen.has(key)) e.push('არტიკული მეორდება ფაილში (იგივე საწყობი)');
+      seen.add(key);
+      const p = art ? get('SELECT * FROM products WHERE art=?', art) : null;
+      if (!p) { if (art && !name) e.push('ახალ პროდუქტს სჭირდება დასახელება'); }
+      else if (!e.length) {
+        st = 'upd';
+        const s = get('SELECT qty, loc FROM stock WHERE product_id=? AND wh_id=?', p.id, w) || { qty: 0, loc: '' };
+        const wl = w === 2 ? ' (საწყ. 2)' : '';
+        if (name && name !== p.name) ch.push('დასახელება');
+        if (uom && uom !== p.uom) ch.push(`ერთეული ${p.uom} → ${uom}`);
+        if (min !== '' && num(min) !== p.min_qty) ch.push(`მინ. ${p.min_qty} → ${num(min)}`);
+        if (qty !== '' && num(qty) !== s.qty) ch.push(`ნაშთი${wl} ${s.qty} → ${num(qty)}`);
+        if (cost !== '' && num(cost) !== p.avg_cost) ch.push(`ფასი ${r2(p.avg_cost)} → ${num(cost)}`);
+        if (loc && locCode(loc).toLowerCase() !== String(s.loc).toLowerCase()) ch.push(`ლოკაცია${wl} ${s.loc || '—'} → ${locCode(loc)}`);
+        if (!ch.length) st = 'same';
+      }
+      if (!e.length && locCode(loc) && (w === 1 || w === 2) && !findLoc(w, locCode(loc))) ch.push('ახალი ლოკაცია სიაში');
     } else if (type === 'vehicles') {
       const [plate, vin, make, model, year, km] = c;
       const V = vin.toUpperCase();
@@ -270,22 +322,45 @@ function importCheck(type, rows) {
       if (V && seen.has(V)) e.push('VIN მეორდება ფაილში');
       seen.add(V);
       if (V && get('SELECT 1 FROM vehicles WHERE vin=?', V)) st = 'upd';
-    } else if (type === 'stock') {
-      const [art, qty, cost, loc, wh] = c;
-      st = 'upd';
-      if (!get('SELECT 1 FROM products WHERE art=?', art)) e.push('პროდუქტი ვერ მოიძებნა');
-      if (qty === '' || !okNum(qty)) e.push('რაოდენობა არასწორია');
-      if (!okNum(cost)) e.push('ღირებულება არასწორია');
-      const w = wh === '' ? 1 : +wh;
-      if (w !== 1 && w !== 2) e.push('საწყობი: 1 ან 2');
-      else if (w === 2 && setting('wh2') !== '1') e.push('მეორე საწყობი გამორთულია');
     } else fail('უცნობი იმპორტის ტიპი');
-    // Unknown locations are created on import; say so in the preview.
-    const loc = type === 'products' ? c[6] : type === 'stock' ? c[3] : '';
-    const lw = type === 'stock' && c[4] === '2' ? 2 : 1;
-    const info = !e.length && locCode(loc) && !findLoc(lw, locCode(loc)) ? 'ახალი ლოკაცია: ' + locCode(loc) : '';
-    return { c, st: e.length ? 'err' : st, msg: e.length ? e.join('; ') : info };
+    return { c, st: e.length ? 'err' : st, msg: e.length ? e.join('; ') : ch.join(' · ') };
   });
+}
+
+/* ---------- fitment matrix import: first column VIN, other column headers are article numbers ---------- */
+const MARK_YES = /^(1|x|✓|✔|\+|v|yes|y|true|კი)$/i;
+// Header cells that describe the vehicle (plate, model…) are allowed for readability and ignored.
+const INFO_HEADERS = ['plate', 'make', 'model', 'year', 'km', 'dept'].flatMap(k => HEADERS[k]).map(hnorm).concat(['მარკამოდელი', 'ტექნიკა']);
+function fitmentPlan(rows, replace) {
+  if (rows.length < 2) fail('ფაილს სჭირდება სათაურის სტრიქონი (VIN და არტიკულები) და მინიმუმ ერთი VIN');
+  const head = rows[0].map(x => str(x));
+  const cols = [];
+  const unknown = [];
+  head.forEach((a, i) => {
+    if (i === 0 || !a || INFO_HEADERS.includes(hnorm(a))) return;
+    const p = get('SELECT id FROM products WHERE art=?', a);
+    if (p) cols.push({ i, pid: p.id }); else unknown.push(a);
+  });
+  const seen = new Set();
+  const out = rows.slice(1).map(r => {
+    const vin = str(r[0]).toUpperCase();
+    const v = vin ? get('SELECT id, make, model, plate FROM vehicles WHERE vin=?', vin) : null;
+    const pids = [...new Set(cols.filter(c => MARK_YES.test(str(r[c.i]))).map(c => c.pid))];
+    let st, msg, add = 0;
+    if (!vin) { st = 'err'; msg = 'VIN ცარიელია'; }
+    else if (!v) { st = 'err'; msg = 'VIN ვერ მოიძებნა რეესტრში'; }
+    else if (seen.has(vin)) { st = 'err'; msg = 'VIN მეორდება ფაილში'; }
+    else {
+      const have = new Set(all('SELECT product_id FROM fitment WHERE vehicle_id=?', v.id).map(x => x.product_id));
+      add = pids.filter(p => !have.has(p)).length;
+      const del = replace ? [...have].filter(p => !pids.includes(p)).length : 0;
+      st = add || del ? 'upd' : 'same';
+      msg = `${pids.length} ნაწილი · ${add} ახალი` + (del ? ` · ${del} წაიშლება` : '');
+    }
+    if (vin) seen.add(vin);
+    return { c: [vin, v ? `${v.make} ${v.model} · ${v.plate}` : '', String(pids.length)], st, msg, vid: v ? v.id : null, pids, add };
+  });
+  return { rows: out, unknown, articles: cols.length };
 }
 
 /* ---------- commands ---------- */
@@ -555,45 +630,72 @@ const commands = {
     return true;
   },
   // Confirms in the catalog every product issued on the same model in two or more service orders.
+  // Links one part to one exact vehicle (VIN); used for machinery where units of the same model differ.
+  'fitment.toggle'({ vid, pid }) {
+    if (!get('SELECT 1 FROM vehicles WHERE id=?', vid)) fail('ტექნიკა ვერ მოიძებნა');
+    product(pid);
+    fitVer++;
+    if (get('SELECT 1 FROM fitment WHERE vehicle_id=? AND product_id=?', vid, pid)) { run('DELETE FROM fitment WHERE vehicle_id=? AND product_id=?', vid, pid); return false; }
+    run('INSERT INTO fitment VALUES(?,?)', vid, pid);
+    return true;
+  },
   'catalog.learn'() {
     return run(`INSERT OR IGNORE INTO catalog(model, product_id)
       SELECT v.make || ' ' || v.model, p.product_id FROM so_parts p
       JOIN service_orders o ON o.id = p.so_id JOIN vehicles v ON v.id = o.vehicle_id
       WHERE p.qty - p.ret > 0 GROUP BY v.make || ' ' || v.model, p.product_id HAVING COUNT(DISTINCT o.id) >= 2`).changes;
   },
-  'import.check'({ type, rows }) { return importCheck(type, rows || []); },
-  'import.apply'({ type, rows }) {
-    let n = 0, u = 0, skipped = 0;
-    importCheck(type, rows || []).forEach(({ c, st }) => {
+  'import.check'({ type, rows, replace }) {
+    if (type === 'fitment') {
+      const f = fitmentPlan(rows || [], !!replace);
+      return { rows: f.rows.map(({ c, st, msg }) => ({ c, st, msg })), header: true, missing: [], unknown: f.unknown, articles: f.articles };
+    }
+    const m = importRows(type, rows || []);
+    return { rows: importCheck(type, m.rows), header: m.header, missing: m.missing };
+  },
+  'import.apply'({ type, rows, replace }) {
+    let n = 0, u = 0, same = 0, skipped = 0;
+    if (type === 'fitment') {
+      // n = links added, u = vehicles changed. Replace rewrites the links of the VINs in the file.
+      fitmentPlan(rows || [], !!replace).rows.forEach(r => {
+        if (r.st === 'err') { skipped++; return; }
+        if (r.st === 'same') { same++; return; }
+        if (replace) run('DELETE FROM fitment WHERE vehicle_id=?', r.vid);
+        r.pids.forEach(pid => run('INSERT OR IGNORE INTO fitment VALUES(?,?)', r.vid, pid));
+        n += r.add;
+        u++;
+      });
+      fitVer++;
+      return { n, u, same, skipped };
+    }
+    importCheck(type, importRows(type, rows || []).rows).forEach(({ c, st }) => {
       if (st === 'err') { skipped++; return; }
+      if (st === 'same') { same++; return; }
       if (type === 'products') {
-        const [art, name, uom, min, cost, qty, loc] = c;
-        const p = get('SELECT * FROM products WHERE art=?', art);
+        const [art, name, uom, min, qty, cost, loc, wh] = c;
+        const w = wh === '' ? 1 : +wh;
+        let p = get('SELECT * FROM products WHERE art=?', art);
         if (p) {
-          run('UPDATE products SET name=?,uom=?,min_qty=? WHERE id=?', name, uom || p.uom, min === '' ? p.min_qty : num(min), p.id);
-          if (loc) setLoc(p.id, 1, ensureLoc(1, loc));
+          run('UPDATE products SET name=?,uom=?,min_qty=? WHERE id=?', name || p.name, uom || p.uom, min === '' ? p.min_qty : num(min), p.id);
+          if (cost !== '') run('UPDATE products SET avg_cost=? WHERE id=?', num(cost), p.id);
           u++;
         } else {
-          const pid = commands['product.save']({ art, name, uom: uom || 'ცალი', min, cost, locs: { 1: ensureLoc(1, loc) } });
-          if (num(qty) > 0) { addStock(pid, 1, num(qty)); move('imp', 'იმპორტი', pid, num(qty), 1, null, 'CSV'); }
+          p = product(commands['product.save']({ art, name, uom: uom || 'ცალი', min, cost, locs: {} }));
           n++;
         }
-      } else if (type === 'vehicles') {
+        if (loc) setLoc(p.id, w, ensureLoc(w, loc));
+        if (qty !== '') {
+          const q = num(qty), cur = stockQty(p.id, w);
+          if (q !== cur) { addStock(p.id, w, r4(q - cur)); move('imp', 'იმპორტი', p.id, q, w, null, 'CSV'); }
+        }
+      } else {
         const [plate, vin, make, model, year, km, dept] = c;
         const v = get('SELECT * FROM vehicles WHERE vin=?', vin.toUpperCase());
         if (v) { run('UPDATE vehicles SET plate=?,km=MAX(km,?),dept=? WHERE id=?', plate.toUpperCase(), str(km) === '' ? 0 : Math.round(num(km)), dept || v.dept, v.id); u++; }
         else { commands['vehicle.save']({ plate, vin, make, model, year, km, dept }); n++; }
-      } else {
-        const [art, qty, cost, loc, wh] = c;
-        const p = get('SELECT * FROM products WHERE art=?', art), w = wh === '' ? 1 : +wh, q = num(qty);
-        addStock(p.id, w, r4(q - stockQty(p.id, w)));
-        if (cost !== '') run('UPDATE products SET avg_cost=? WHERE id=?', num(cost), p.id);
-        if (loc) setLoc(p.id, w, ensureLoc(w, loc));
-        move('imp', 'იმპორტი', p.id, q, w, null, 'საწყისი ნაშთი');
-        u++;
       }
     });
-    return { n, u, skipped };
+    return { n, u, same, skipped };
   }
 };
 

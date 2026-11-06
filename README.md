@@ -21,6 +21,8 @@ Rules enforced in the database layer:
 - Saving a purchase order puts the goods in stock immediately.
 - Open service orders close automatically N days (default 7) after their **last change**, and can be reopened.
 - The catalog is a recommendation only; it never blocks issuing a part.
+- Fitment per exact vehicle (VIN) comes from a matrix CSV (first column VIN, column headers are article numbers, a mark such as `1`/`x`/`✓` means the part fits) or from the vehicle page; it is shown first among a service order's recommendations. The import adds links; the replace option rewrites the links of the VINs in the file.
+- Products and their stock are imported from one CSV; columns are matched by header name (earlier templates still work), and an empty cell on an existing product leaves the value unchanged.
 - Locations are a managed list per warehouse (free codes such as `A-01-02` or `ZONE-3`); a product can only be placed on an active location from the list. Renaming a location moves its products; only empty locations can be deleted. CSV import adds unknown locations to the list.
 - VIN: 17 characters for road vehicles (no I, O, Q); 5–25 characters for machinery serials such as JCB (9, 11, 12, 18, 21…); Latin letters, digits and `-` only; unique.
 - Serial numbers are optional on every issue, at most one per unit, and a serial can be on only one vehicle at a time (issued and not returned). Returns record which serials came back.

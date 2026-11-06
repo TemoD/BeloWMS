@@ -97,10 +97,11 @@ X('location.bulkAdd', { wh: 2, codes: L2.join('\n') });
 products.forEach((p, i) => { p.qty = p.liquid ? ri(40, 300) : ri(0, 12); p.loc = i < 2900 ? L1[i % L1.length] : ''; });
 
 /* ---------- CSV import of products (the remaining 100 grid locations are created by the import) ---------- */
-const csvRows = products.map(p => [p.art, p.name, p.uom, String(p.min), String(p.cost).replace('.', ','), String(p.qty), p.loc]);
+// Template order: art, name, uom, min, qty, cost, loc, wh — with the header row a user's file would have.
+const csvRows = [['არტიკული', 'დასახელება', 'ზომის ერთეული', 'მინ. ნაშთი', 'რაოდენობა', 'ღირებულება', 'ლოკაცია', 'საწყობი'], ...products.map(p => [p.art, p.name, p.uom, String(p.min), String(p.qty), String(p.cost).replace('.', ','), p.loc, ''])];
 const badRows = [['', 'უარტიკულო', 'ცალი', '1', '1', '1', ''], ['BAD-UOM-1', 'უცნობი ერთეული', 'ყუთი', '1', '1', '1', ''], ['BAD-NUM-1', 'ცუდი რიცხვი', 'ცალი', 'x', '1', '1', ''], [products[5].art, 'დუბლიკატი ფაილში', 'ცალი', '1', '1', '1', '']];
 const imported = [...csvRows, ...badRows];
-const check = timed('import.check 3004 products', () => DB.exec('import.check', { type: 'products', rows: imported }));
+const check = timed('import.check 3004 products', () => DB.exec('import.check', { type: 'products', rows: imported })).rows;
 const importSummary = { new: check.filter(r => r.st === 'new').length, upd: check.filter(r => r.st === 'upd').length, err: check.filter(r => r.st === 'err').length, newLocations: check.filter(r => /ახალი ლოკაცია/.test(r.msg)).length };
 const applied = timed('import.apply 3004 products', () => DB.exec('import.apply', { type: 'products', rows: imported }));
 
@@ -112,7 +113,7 @@ const L = 'ABCDEFGHIKLMNOPRSTUVWXYZ';
 const mkPlate = () => { let p; do p = `${pick(L)}${pick(L)}-${ri(100, 999)}-${pick(L)}${pick(L)}`; while (plates.has(p)); plates.add(p); return p; };
 const vehRows = Array.from({ length: 600 }, (_, i) => { const m = MODELS[i % MODELS.length].split(' '); return [mkPlate(), mkVin(), m[0], m.slice(1).join(' '), String(ri(2008, 2025)), String(ri(5000, 450000)), pick(['ლოგისტიკა', 'მიწოდება', 'სატვირთო', 'ადმინისტრაცია', 'სერვისი'])]; });
 const vehBad = [['ZZ-000-ZZ', 'AB1', 'Ford', 'Transit', '2019', '1', ''], ['QQ-111-QQ', 'IOQIOQIOQIOQIOQIO', 'Ford', 'Transit', '2019', '1', '']];
-const vehCheck = timed('import.check 602 vehicles', () => DB.exec('import.check', { type: 'vehicles', rows: [...vehRows, ...vehBad] }));
+const vehCheck = timed('import.check 602 vehicles', () => DB.exec('import.check', { type: 'vehicles', rows: [...vehRows, ...vehBad] })).rows;
 const vehApplied = timed('import.apply 602 vehicles', () => DB.exec('import.apply', { type: 'vehicles', rows: [...vehRows, ...vehBad] }));
 
 const suppliers = Array.from({ length: 60 }, (_, i) => X('supplier.save', { name: `შპს „მომწოდებელი ${i + 1}“`, tin: String(400000000 + i), phone: '+995 5' + ri(10000000, 99999999) }).r);
