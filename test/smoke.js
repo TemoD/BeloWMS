@@ -43,6 +43,8 @@ module.exports = function smoke(win, { app }) {
       await js(`const o=S.sos[0];const l=o.parts[o.parts.length-1];retPart(o.id,l.lid);document.querySelector('.rsn[value="BAT-002"]').click();await doRet(o.id,l.lid);`);
       await check('serial returned', `const l=S.sos[0].parts[S.sos[0].parts.length-1];return {ret:l.ret,retSerials:l.retSerials}`);
       await js(`const o=S.sos[0];editSerials(o.id,o.parts[1].lid);$('#snl').value='FLT-77';await saveSerials(o.id,o.parts[1].lid);`);
+      await js(`const o=S.sos[0];retPart(o.id,o.parts[1].lid);document.querySelector('.rsn')?.click();$('#rq').value=1;await doRet(o.id,o.parts[1].lid);`);
+      await check('fully returned line', `const l=S.sos[0].parts[1];return {qty:l.qty,ret:l.ret,greyRows:document.querySelectorAll('tr.ret').length,strip:!!document.querySelector('.recstrip'),rightPanel:document.body.innerText.includes('რეკომენდაცია კატალოგიდან')}`);
       await shot('04-service-order');
       await js(`$('#gs').value='BAT-00';gSearch();`); await shot('04b-serial-search');
       await check('serial search', `return [...document.querySelectorAll('#gsr button')].map(b=>b.textContent).slice(0,3)`);
@@ -50,7 +52,7 @@ module.exports = function smoke(win, { app }) {
       await js(`retPart(S.sos[0].id,S.sos[0].parts[0].lid);$('#rq').value=1;await doRet(S.sos[0].id,S.sos[0].parts[0].lid);`);
       await check('after return', `return {ret:S.sos[0].parts[0].ret,oil:S.products[1].stock[1].q}`);
       await js(`printSO(S.sos[0].id)`); await wait(300);
-      fs.writeFileSync(path.join(out, 'service-order.pdf'), await win.webContents.printToPDF({ pageSize: 'A4', printBackground: true, margins: { marginType: 'none' } }));
+      fs.writeFileSync(path.join(out, 'service-order.pdf'), await win.webContents.printToPDF({ pageSize: 'A4', landscape: true, printBackground: true, margins: { marginType: 'none' } }));
       await shot('05-pdf-preview');
       await js(`closePrint();go('stock');await call('location.bulkAdd',{wh:1,codes:'ZONE-3\\nგარე საწყობი\\nA-01-01'});stSel='A-01-01';render();`);
       await js(`openLocation('ZONE-3');$('#lcode').value='ZONE-03';$('#lnote').value='ეზო, ფარდული';await saveLocation('ZONE-3');`);

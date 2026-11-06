@@ -153,8 +153,8 @@ test('catalog learns products used twice on the same model', () => {
   DB.exec('po.create', { sup, lines: [{ pid, qty: 5, price: 1 }] });
   for (let i = 0; i < 2; i++) { const id = DB.exec('so.create', { vid, resp: 'ა' }); DB.exec('so.issue', { id, pid, qty: 1 }); }
   assert.equal(DB.exec('catalog.learn'), 1);
-  assert.deepEqual(DB.getState().catalog, [{ model: 'Toyota Hilux', pid }]);
-  assert.equal(DB.exec('catalog.toggle', { model: 'Toyota Hilux', pid }), false);
+  assert.deepEqual(DB.getState().catalog, [{ model: 'Toyota Hilux 2021', pid }], 'grouped by make, model and year');
+  assert.equal(DB.exec('catalog.toggle', { model: 'Toyota Hilux 2021', pid }), false);
 });
 
 test('CSV import: one file creates products and updates stock; empty cells leave values unchanged', () => {
@@ -291,4 +291,13 @@ test('fitment matrix: VIN rows × article columns, marks, info columns, add-only
   assert.equal(DB.exec('fitment.toggle', { vid: v2, pid }), true);
   assert.deepEqual(DB.getState({ delta: true }).fitment[v2].sort(), [pid, p2].sort());
   assert.throws(() => DB.exec('import.check', { type: 'fitment', rows: [head] }), /სათაურის/);
+});
+
+test('CSV header names with stray separators from Excel ("VIN;") are still recognised', () => {
+  fresh();
+  const rows = [['სახ. ნომერი;', 'VIN;', 'მარკა;', 'მოდელი;', 'წელი;', 'გარბენი;', 'განყოფილება'], ['AA001', 'JCB2828391', 'JCB', '3CX', '2020', '3000', 'საგზაო'], ['AA002', 'JCB2828391', 'JCB', '3CX', '2020', '3000', '']];
+  const c = DB.exec('import.check', { type: 'vehicles', rows });
+  assert.equal(c.header, true);
+  assert.deepEqual(c.rows.map(r => r.st), ['new', 'err']);
+  assert.match(c.rows[1].msg, /მეორდება/);
 });

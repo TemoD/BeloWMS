@@ -46,6 +46,8 @@ const ICONS = {
   arrowIn: '<path d="M12 4v12M7 11l5 5 5-5M5 20h14"/>',
   arrowOut: '<path d="M12 20V8M7 13l5-5 5 5M5 4h14"/>',
   swap: '<path d="M7 4 3 8l4 4M3 8h14M17 20l4-4-4-4M21 16H7"/>',
+  chevronL: '<path d="M15 6l-6 6 6 6"/>',
+  chevronR: '<path d="M9 6l6 6-6 6"/>',
   folder: '<path d="M3 6a1 1 0 0 1 1-1h5l2 2h9a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/>',
   external: '<path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>'
 };
@@ -94,7 +96,8 @@ const SUP = id => ix().sup.get(id) || { name: '—' };
 const whs = () => S.settings.wh2 ? [1, 2] : [1];
 const totQ = p => whs().reduce((a, w) => a + p.stock[w].q, 0);
 const isLow = p => p.min > 0 && totQ(p) < p.min;
-const modelKey = v => v.make + ' ' + v.model;
+// Catalog group: make + model + year (year left out when unknown). Same rule as MODEL_SQL in db.js.
+const modelKey = v => [v.make, v.model, v.year].filter(Boolean).join(' ');
 const models = () => [...new Set(S.vehicles.map(modelKey))].sort();
 const partsCost = o => o.parts.reduce((a, l) => a + (l.qty - l.ret) * l.price, 0);
 const svcCost = o => o.svcs.reduce((a, s) => a + (+s.price || 0), 0);
@@ -332,7 +335,7 @@ VIEWS.sos = () => {
   ${limited('sos', list).rows.map(o => { const v = V(o.vid); return `<tr class="click" onclick="go('so','${o.id}')"><td class="mono">${o.id}</td><td>${fmtD(o.date)}</td><td>${plate(v.plate)} <span class="sub">${esc(modelKey(v))}</span></td><td class="mono sub">${esc(v.vin)}</td><td>${esc(o.resp)}</td><td class="num">${money(partsCost(o))}</td><td class="num">${o.svcs.length ? money(svcCost(o)) : '—'}</td><td class="num"><b>${money(soCost(o))}</b></td><td>${statusBadge(o)}${o.status === 'open' ? `<div class="sub">${daysLeft(o) <= 0 ? 'იხურება დღეს' : 'იხურება ' + daysLeft(o) + ' დღეში'}</div>` : ''}</td></tr>`; }).join('') || emptyRow(9, S.sos.length ? 'ორდერი ვერ მოიძებნა' : 'სერვის ორდერი ჯერ არ არის — დააჭირეთ „ახალი სერვის ორდერი“')}
   </tbody></table></div>${limited('sos', list).more}</div>`;
 };
-let nsVid = null;
+let nsVid = null, soRecAll = false;
 function newSO(vid = null) {
   if (!S.vehicles.length) { toast('ჯერ დაამატეთ ტექნიკა რეესტრში', 'info'); go('vehicles'); return; }
   nsVid = vid;
@@ -342,7 +345,7 @@ function newSO(vid = null) {
    <div class="pick" id="nsres"></div>
    <div class="grid2">
     <div class="field"><label class="req">პასუხისმგებელი პირი</label><input id="nsr" list="dlr" ${v ? 'autofocus' : ''} placeholder="სახელი, გვარი" autocomplete="off"><span class="hint">თავისუფალი ტექსტი · აკრეფისას გთავაზობთ ბოლო შეყვანილებს</span></div>
-    <div class="field"><label>გარბენი (კმ)</label><input id="nsk" type="number" min="0" placeholder="${v ? 'ბოლო: ' + v.km : ''}"></div>
+    <div class="field"><label>გარბენი (კმ / საათი)</label><input id="nsk" type="number" min="0" placeholder="${v ? 'ბოლო: ' + v.km : ''}"></div>
    </div>`, btn('გაუქმება', 'closeModal()') + btn('ორდერის გახსნა', 'createSO()', 'primary', 'check'));
   nsSearch();
 }
@@ -356,7 +359,7 @@ function nsPick(id) {
 function nsSearch() {
   const n = norm($('#nsq')?.value);
   const list = S.vehicles.filter(v => !n || norm(v.plate).includes(n) || norm(v.vin).includes(n)).slice(0, 50);
-  $('#nsres').innerHTML = list.map(v => `<button class="${nsVid === v.id ? 'on' : ''}" onclick="nsPick('${v.id}')">${plate(v.plate)}<span>${esc(modelKey(v))} · ${esc(v.year || '')}</span><span class="mono sub" style="margin-left:auto">${esc(v.vin)}</span></button>`).join('') || `<div class="empty">ტექნიკა ვერ მოიძებნა · <a style="color:var(--accent);cursor:pointer" onclick="openVehicle()">რეესტრში დამატება</a></div>`;
+  $('#nsres').innerHTML = list.map(v => `<button class="${nsVid === v.id ? 'on' : ''}" onclick="nsPick('${v.id}')">${plate(v.plate)}<span>${esc(modelKey(v))}${v.year ? ' · ' + esc(v.year) : ''}</span><span class="mono sub" style="margin-left:auto">${esc(v.vin)}</span></button>`).join('') || `<div class="empty">ტექნიკა ვერ მოიძებნა · <a style="color:var(--accent);cursor:pointer" onclick="openVehicle()">რეესტრში დამატება</a></div>`;
 }
 async function createSO() {
   if (!nsVid) return toast('აირჩიეთ ტექნიკა სიიდან', 'err');
@@ -367,46 +370,46 @@ VIEWS.so = id => {
   const o = SO(id);
   if (!o) return VIEWS.sos();
   const v = V(o.vid), closed = o.status !== 'open', m = modelKey(v), wh2 = S.settings.wh2;
-  const recAll = recsFor(o, v), recs = recAll.slice(0, 12), inOrder = new Set(o.parts.map(l => l.pid)), dl = daysLeft(o);
+  const recAll = recsFor(o, v), inOrder = new Set(o.parts.map(l => l.pid)), dl = daysLeft(o);
   const state = o.status === 'open'
     ? `<div class="note info">${ic('clock')}<div>ორდერი ღიაა. ბოლო ცვლილება: <b>${fmtD(autoBase(o))}</b>. ავტომატურად დაიხურება <b>${dl <= 0 ? 'დღეს' : dl + ' დღეში'}</b> (${fmtD(addDays(autoBase(o), S.settings.autoClose))}), თუ ახალი ცვლილება არ შევა.</div></div>`
     : `<div class="note ${o.status === 'auto' ? 'warn' : ''}">${ic('lock')}<div>${o.status === 'auto' ? 'ორდერი <b>ავტომატურად დაიხურა</b>' : 'ორდერი <b>ხელით დაიხურა</b>'} ${fmtD(o.closedAt)}. ცვლილებისთვის გახსენით ხელახლა.</div></div>`;
   const acts = (closed ? btn('ხელახლა გახსნა', `call('so.reopen',{id:'${o.id}'},'ორდერი ხელახლა გაიხსნა')`, '', 'unlock') : btn('ორდერის დახურვა', `call('so.close',{id:'${o.id}'},'ორდერი დაიხურა')`, '', 'lock')) + btn('PDF ფორმა', `printSO('${o.id}')`, '', 'download');
   return ph(`სერვის ორდერი <span class="mono" style="font-size:19px">${o.id}</span> ${statusBadge(o)}`, 'გახსნილია ' + fmtD(o.date), acts, `<a onclick="go('sos')">სერვის ორდერები</a> / ${o.id}`) + state +
     `<div class="info-strip">
-    <div><label>ტექნიკა</label><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">${plate(v.plate)}<a style="color:var(--accent);cursor:pointer;font-weight:500" onclick="go('vehicle','${v.id}')">${esc(modelKey(v))} · ${esc(v.year || '')}</a></div><div class="mono sub" style="margin-top:4px">VIN ${esc(v.vin)}</div></div>
+    <div><label>ტექნიკა</label><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">${plate(v.plate)}<a style="color:var(--accent);cursor:pointer;font-weight:500" onclick="go('vehicle','${v.id}')">${esc(modelKey(v))}${v.year ? ' · ' + esc(v.year) : ''}</a></div><div class="mono sub" style="margin-top:4px">VIN ${esc(v.vin)}</div></div>
     <div><label>პასუხისმგებელი პირი</label><input list="dlr" autocomplete="off" value="${esc(o.resp)}" ${closed ? 'disabled' : ''} onchange="call('so.update',{id:'${o.id}',resp:this.value},'შენახულია')"></div>
-    <div><label>გარბენი (კმ)</label><input type="number" min="0" value="${o.km ?? ''}" ${closed ? 'disabled' : ''} onchange="call('so.update',{id:'${o.id}',km:this.value},'შენახულია')"></div>
+    <div><label>გარბენი (კმ / საათი)</label><input type="number" min="0" value="${o.km ?? ''}" ${closed ? 'disabled' : ''} onchange="call('so.update',{id:'${o.id}',km:this.value},'შენახულია')"></div>
     <div><label>სულ ღირებულება</label><div style="font-size:19px;font-weight:700">${money(soCost(o))}</div></div>
   </div>
-  <div class="cols">
-   <div>
-    <div class="card"><header><h3>გაცემული ნაწილები</h3><span class="sub">${o.parts.length} ხაზი</span></header>
-     <div class="tw"><table class="t"><thead><tr><th>არტიკული</th><th>დასახელება</th>${wh2 ? '<th>საწყობი</th>' : ''}<th class="num">გაცემული</th><th class="num">დაბრუნებული</th><th class="num">ფასი</th><th class="num">ჯამი</th><th></th></tr></thead><tbody>
-     ${o.parts.map(l => { const p = P(l.pid), net = l.qty - l.ret; return `<tr><td class="mono">${esc(p.art)}<div class="sub">${p.id}</div></td><td>${esc(p.name)}${l.serials.length ? `<div class="sub mono" style="margin-top:2px">S/N: ${l.serials.map(s => `<span style="white-space:nowrap">${l.retSerials.some(x => sameCode(x, s)) ? `<s title="დაბრუნებულია">${esc(s)}</s>` : esc(s)}</span>`).join(', ')}</div>` : ''}</td>${wh2 ? `<td>${esc(S.wh[l.wh])}</td>` : ''}<td class="num">${qfmt(l.qty)} ${esc(p.uom)}</td><td class="num">${l.ret ? qfmt(l.ret) : '—'}</td><td class="num">${money(l.price)}</td><td class="num"><b>${money(net * l.price)}</b></td><td style="white-space:nowrap">${!closed ? btn('S/N', `editSerials('${o.id}',${l.lid})`, 'sm ghost', '', false) : ''}${!closed && net > 0 ? `<button class="btn sm ghost" title="დაბრუნება საწყობში" onclick="retPart('${o.id}',${l.lid})">${ic('undo')}</button>` : ''}</td></tr>`; }).join('') || emptyRow(wh2 ? 8 : 7, 'ნაწილი ჯერ არ გაცემულა — აირჩიეთ ქვემოთ ან რეკომენდაციიდან')}
-     </tbody><tfoot><tr><td colspan="${wh2 ? 6 : 5}">ნაწილები სულ</td><td class="num">${money(partsCost(o))}</td><td></td></tr></tfoot></table></div>
-     ${closed ? '' : `<div class="addrow"><input id="sop" list="dlp" placeholder="არტიკული, კოდი ან დასახელება…" oninput="soWarn('${o.id}')" autocomplete="off"><input id="soqty" type="number" min="0" step="any" value="1" class="w80" title="რაოდენობა" oninput="soWarn('${o.id}')"><input id="sosn" class="mono w160" style="width:200px" autocomplete="off" placeholder="სერიული № (არასავალდ.)" title="რამდენიმე — მძიმით გამოყოფილი">${whSelect('sowh', 1, `soWarn('${o.id}')`)}<button class="btn primary" onclick="addPart('${o.id}')">${ic('arrowOut')}გაცემა</button></div><div id="sowarn" style="padding:0 16px"></div>`}
+  <div class="card"><header><h3>გაცემული ნაწილები</h3><span class="sub">${o.parts.length} ხაზი</span></header>
+     <div class="tw"><table class="t"><thead><tr><th>არტიკული</th><th>დასახელება</th>${wh2 ? '<th>საწყობი</th>' : ''}<th class="num">რაოდენობა</th><th class="num">ფასი</th><th class="num">ჯამი</th><th></th></tr></thead><tbody>
+     ${o.parts.map(l => {
+       // A fully returned line is greyed and struck through; a partly returned one shows the net quantity.
+       const p = P(l.pid), net = l.qty - l.ret, gone = net <= 0;
+       return `<tr class="${gone ? 'ret' : ''}"><td class="mono"><span class="st">${esc(p.art)}</span><div class="sub">${p.id}</div></td><td><span class="st">${esc(p.name)}</span>${gone ? '<div class="sub">დაბრუნდა</div>' : ''}${l.serials.length ? `<div class="sub mono" style="margin-top:2px">S/N: ${l.serials.map(s => `<span style="white-space:nowrap">${l.retSerials.some(x => sameCode(x, s)) ? `<s title="დაბრუნებულია">${esc(s)}</s>` : esc(s)}</span>`).join(', ')}</div>` : ''}</td>${wh2 ? `<td>${esc(S.wh[l.wh])}</td>` : ''}<td class="num"><span class="st">${qfmt(gone ? l.qty : net)} ${esc(p.uom)}</span>${l.ret && !gone ? `<div class="sub">გაიცა ${qfmt(l.qty)}, დაბრუნდა ${qfmt(l.ret)}</div>` : ''}</td><td class="num">${money(l.price)}</td><td class="num">${gone ? '—' : `<b>${money(net * l.price)}</b>`}</td><td style="white-space:nowrap">${!closed && !gone ? btn('S/N', `editSerials('${o.id}',${l.lid})`, 'sm ghost', '', false) : ''}${!closed && !gone ? `<button class="btn sm ghost" title="დაბრუნება საწყობში" onclick="retPart('${o.id}',${l.lid})">${ic('undo')}</button>` : ''}</td></tr>`;
+     }).join('') || emptyRow(wh2 ? 7 : 6, 'ნაწილი ჯერ არ გაცემულა — აირჩიეთ ქვემოთ ან შემოთავაზებიდან')}
+     </tbody><tfoot><tr><td colspan="${wh2 ? 5 : 4}">ნაწილები სულ</td><td class="num">${money(partsCost(o))}</td><td></td></tr></tfoot></table></div>
+     ${closed ? '' : `<div class="addrow"><input id="sop" list="dlp" placeholder="არტიკული, კოდი ან დასახელება…" oninput="soWarn('${o.id}')" autocomplete="off"><input id="soqty" type="number" min="0" step="any" value="1" class="w80" title="რაოდენობა" oninput="soWarn('${o.id}')" onkeydown="if(event.key==='Enter')addPart('${o.id}')"><input id="sosn" class="mono w160" style="width:200px" autocomplete="off" placeholder="სერიული № (არასავალდ.)" title="რამდენიმე — მძიმით გამოყოფილი" onkeydown="if(event.key==='Enter')addPart('${o.id}')">${whSelect('sowh', 1, `soWarn('${o.id}')`)}<button class="btn primary" onclick="addPart('${o.id}')">${ic('arrowOut')}გაცემა</button></div><div id="sowarn" style="padding:0 16px"></div>`}
+     ${S.settings.catalogRec && !closed && recAll.length ? `<div class="recstrip"><div class="recstrip-h">${ic('spark')}<b>შემოთავაზება ამ ტექნიკისთვის</b><span class="sub">VIN · კატალოგი · ისტორია — მხოლოდ რეკომენდაცია</span>${recAll.length > 6 ? `<a class="link" style="margin-left:auto" onclick="soRecAll=!soRecAll;render()">${soRecAll ? 'ნაკლები' : 'ყველა ' + recAll.length + ' ›'}</a>` : ''}</div>
+      <div class="recgrid">${(soRecAll ? recAll : recAll.slice(0, 6)).map(r => { const p = P(r.pid), added = inOrder.has(p.id); return `<div class="recchip ${added ? 'added' : ''}" title="აირჩიეთ — რაოდენობა შეიყვანეთ გაცემის ველში" onclick="pickRec('${o.id}','${p.id}')"><div class="n"><div>${esc(p.name)}</div><div class="sub"><span class="mono">${esc(p.art)}</span> · ${qfmt(totQ(p))} ${esc(p.uom)} · ${esc(p.stock[1].loc || '—')}${r.vin ? ' · <span class="vin">VIN</span>' : ''}</div></div>${added ? ic('check') : ''}<button class="btn sm" tabindex="-1">${ic('plus')}</button></div>`; }).join('')}</div></div>` : ''}
     </div>
     <div class="card"><header><h3>მომსახურება</h3><span class="sub">თავისუფალი დასახელება · ფასი არასავალდებულოა</span></header>
      <div class="tw"><table class="t"><thead><tr><th>დასახელება</th><th class="num">ფასი</th><th></th></tr></thead><tbody>
      ${o.svcs.map(s => `<tr><td>${esc(s.name)}</td><td class="num">${s.price != null ? money(s.price) : '<span class="sub">ფასის გარეშე</span>'}</td><td style="width:40px">${closed ? '' : btn('', `call('so.delService',{id:'${o.id}',sid:${s.sid}})`, 'sm ghost danger', 'x')}</td></tr>`).join('') || emptyRow(3, 'მომსახურება არ არის დამატებული')}
-     </tbody></table></div>
+     </tbody>${o.svcs.length ? `<tfoot><tr><td>მომსახურება სულ</td><td class="num">${money(svcCost(o))}</td><td></td></tr></tfoot>` : ''}</table></div>
      ${closed ? '' : `<div class="addrow"><input id="svn" list="dls" class="grow" placeholder="მომსახურების დასახელება, მაგ. „ზეთის შეცვლა“"><input id="svp" type="number" min="0" step="any" class="w160" placeholder="ფასი (არასავალდ.)"><button class="btn" onclick="addSvc('${o.id}')">${ic('plus')}დამატება</button></div>`}
-    </div>
-   </div>
-   <div>
-    ${S.settings.catalogRec ? `<div class="card"><header><h3>${ic('spark')} რეკომენდაცია კატალოგიდან</h3></header>
-     <div class="body" style="padding-bottom:4px"><div class="sub" style="margin-bottom:8px">ამ VIN-ის და მოდელის <b style="color:var(--ink)">${esc(m)}</b> მიხედვით. რეკომენდაციაა და არა შეზღუდვა — შეგიძლიათ ნებისმიერი პროდუქტის გაცემა.</div></div>
-     ${recs.map(r => { const p = P(r.pid); return `<div class="rec"><div class="n"><div>${esc(p.name)}</div><div class="sub"><span class="mono">${esc(p.art)}</span> · ნაშთი ${qfmt(totQ(p))} ${esc(p.uom)} · ${ic('pin')} ${esc(p.stock[1].loc || '—')}</div><div style="margin-top:3px">${r.vin ? '<span class="tag vin">VIN</span> ' : ''}${r.manual ? '<span class="tag man">კატალოგი</span> ' : ''}${r.hist ? `<span class="tag hist">ისტორია · ${r.hist}×</span>` : ''}</div></div>${inOrder.has(p.id) ? '<span class="badge b-ok">დამატებულია</span>' : closed ? '' : btn('გაცემა', `addPart('${o.id}','${p.id}')`, 'sm', 'plus')}</div>`; }).join('') || '<div class="empty">ამ ტექნიკაზე კავშირი ჯერ არ არის. მიაბით ნაწილები VIN-ზე (ტექნიკის გვერდი ან CSV) — ან შეივსება ისტორიიდან.</div>'}
-     ${recAll.length > recs.length ? `<div class="rec"><a class="link" onclick="go('vehicle','${v.id}')">+${recAll.length - recs.length} სხვა ნაწილი — ტექნიკის გვერდზე</a></div>` : ''}
-    </div>` : ''}
-    <div class="card"><header><h3>ჯამი</h3></header><div class="totals">
-      <div><span>ნაწილები</span><span>${money(partsCost(o))}</span></div>
-      <div><span>მომსახურება</span><span>${money(svcCost(o))}</span></div>
-      <div><span>სულ</span><span>${money(soCost(o))}</span></div></div></div>
-   </div>
-  </div>`;
+    </div>`;
 };
+// Picking a suggestion fills the issue row; the quantity (and S/N, warehouse) is then set before clicking "გაცემა".
+function pickRec(oid, pid) {
+  const p = P(pid), q = $('#soqty');
+  $('#sop').value = `${p.id} · ${p.art} · ${p.name}`;
+  q.value = 1;
+  soWarn(oid);
+  q.focus(); q.select();
+  $('#sop').closest('.addrow').scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+}
 function soWarn(oid) {
   const o = SO(oid), p = findProduct($('#sop').value), m = modelKey(V(o.vid)), w = $('#sowarn');
   if (!p) { w.innerHTML = ''; return; }
@@ -672,8 +675,8 @@ VIEWS.vehicles = () => {
   const st = v => { const os = S.sos.filter(o => o.vid === v.id); return [os.length, os.reduce((a, o) => a + soCost(o), 0)]; };
   return ph('ტექნიკის რეესტრი', S.vehicles.length + ' ერთეული · ძებნა VIN კოდით ან სახელმწიფო ნომრით', btn('CSV იმპორტი', "openImport('vehicles')", '', 'upload') + btn('ახალი ტექნიკა', 'openVehicle()', 'primary', 'plus')) +
     `<div class="filters"><div class="gsearch" style="max-width:440px">${ic('search')}<input id="vq" placeholder="VIN ან სახელმწიფო ნომერი, მაგ. TB-482 / WF0XXX…" value="${esc(vQ)}" oninput="vQ=this.value;LIM={};render();refocus('#vq')"></div></div>
-  <div class="card"><div class="tw"><table class="t"><thead><tr><th>სახ. ნომერი</th><th>VIN კოდი</th><th>მარკა / მოდელი</th><th class="num">წელი</th><th class="num">გარბენი</th><th>განყოფილება</th><th class="num">ორდერი</th><th class="num">დანახარჯი სულ</th></tr></thead><tbody>
-  ${limited('vehicles', list).rows.map(v => { const [c, t] = st(v); return `<tr class="click" onclick="go('vehicle','${v.id}')"><td>${plate(v.plate)}</td><td class="mono">${esc(v.vin)}</td><td><b style="font-weight:500">${esc(v.make)}</b> ${esc(v.model)}</td><td class="num">${esc(v.year || '')}</td><td class="num">${qfmt(v.km)} კმ</td><td>${esc(v.dept)}</td><td class="num">${c}</td><td class="num"><b>${money(t)}</b></td></tr>`; }).join('') || emptyRow(8, S.vehicles.length ? 'ვერ მოიძებნა' : 'ტექნიკა ჯერ არ არის — დაამატეთ ხელით ან CSV იმპორტით')}
+  <div class="card"><div class="tw"><table class="t"><thead><tr><th>სახ. ნომერი</th><th>VIN კოდი</th><th>მარკა / მოდელი</th><th class="num">წელი</th><th class="num">გარბენი (კმ / საათი)</th><th>განყოფილება</th><th class="num">ორდერი</th><th class="num">დანახარჯი სულ</th></tr></thead><tbody>
+  ${limited('vehicles', list).rows.map(v => { const [c, t] = st(v); return `<tr class="click" onclick="go('vehicle','${v.id}')"><td>${plate(v.plate)}</td><td class="mono">${esc(v.vin)}</td><td><b style="font-weight:500">${esc(v.make)}</b> ${esc(v.model)}</td><td class="num">${esc(v.year || '')}</td><td class="num">${qfmt(v.km)}</td><td>${esc(v.dept)}</td><td class="num">${c}</td><td class="num"><b>${money(t)}</b></td></tr>`; }).join('') || emptyRow(8, S.vehicles.length ? 'ვერ მოიძებნა' : 'ტექნიკა ჯერ არ არის — დაამატეთ ხელით ან CSV იმპორტით')}
   </tbody></table></div>${limited('vehicles', list).more}</div>`;
 };
 // Same rule as vinProblem() in db.js: 17 = road-vehicle VIN without I/O/Q; 5–25 = machinery serial (e.g. JCB).
@@ -689,7 +692,7 @@ function openVehicle(id) {
   const v = id ? V(id) : {};
   openModal(id ? 'ტექნიკის რედაქტირება' : 'ახალი ტექნიკა', `<div class="grid2"><div class="field"><label class="req">სახელმწიფო ნომერი</label><input id="vp" class="mono" autofocus value="${esc(v.plate)}" placeholder="AA-123-BB"></div><div class="field"><label class="req">VIN / სერიული №</label><input id="vv" class="mono" maxlength="25" value="${esc(v.vin)}" placeholder="17 (ავტომობილი) ან 5–25 (ტექნიკა)" oninput="this.value=this.value.toUpperCase();$('#vvh').textContent=vinHint(this.value)"><span class="hint" id="vvh">${vinHint(v.vin || '')}</span></div></div>
    <div class="grid3"><div class="field"><label class="req">მარკა</label><input id="vm" list="dlmk" value="${esc(v.make)}"><datalist id="dlmk">${[...new Set(S.vehicles.map(x => x.make))].map(m => `<option value="${esc(m)}">`).join('')}</datalist></div><div class="field"><label class="req">მოდელი</label><input id="vmo" value="${esc(v.model)}"></div><div class="field"><label>წელი</label><input id="vy" type="number" value="${esc(v.year ?? '')}" placeholder="2024"></div></div>
-   <div class="grid2"><div class="field"><label>გარბენი (კმ)</label><input id="vk" type="number" min="0" value="${esc(v.km ?? '')}"></div><div class="field"><label>განყოფილება</label><input id="vd" value="${esc(v.dept)}"></div></div>`,
+   <div class="grid2"><div class="field"><label>გარბენი (კმ / საათი)</label><input id="vk" type="number" min="0" value="${esc(v.km ?? '')}"></div><div class="field"><label>განყოფილება</label><input id="vd" value="${esc(v.dept)}"></div></div>`,
   btn('გაუქმება', 'closeModal()') + btn('შენახვა', `saveVehicle(${id ? `'${id}'` : 'null'})`, 'primary', 'check'));
 }
 async function saveVehicle(id) {
@@ -705,11 +708,11 @@ VIEWS.vehicle = id => {
   const agg = {};
   os.forEach(o => o.parts.forEach(l => { agg[l.pid] = agg[l.pid] || { q: 0, c: 0 }; agg[l.pid].q += l.qty - l.ret; agg[l.pid].c += (l.qty - l.ret) * l.price; }));
   const top = Object.entries(agg).filter(a => a[1].q > 0).sort((a, b) => b[1].c - a[1].c).slice(0, 6);
-  return ph(`${plate(v.plate)} <span style="margin-left:6px">${esc(modelKey(v))}</span>`, `VIN <span class="mono">${esc(v.vin)}</span> · ${esc(v.year || '')} · ${qfmt(v.km)} კმ · ${esc(v.dept)}`,
+  return ph(`${plate(v.plate)} <span style="margin-left:6px">${esc(modelKey(v))}</span>`, `VIN <span class="mono">${esc(v.vin)}</span> · ` + [v.year, qfmt(v.km) + ' კმ / საათი', v.dept].filter(Boolean).map(esc).join(' · '),
     btn('რედაქტირება', `openVehicle('${v.id}')`, '', 'edit') + btn('სერვის ორდერი ამ მანქანაზე', `newSO('${v.id}')`, 'primary', 'plus'), `<a onclick="go('vehicles')">ტექნიკის რეესტრი</a> / ${esc(v.plate)}`) +
     `<div class="kpis">${kpi('დანახარჯი სულ', money(tot), 'ყველა სერვის ორდერი')}${kpi('ნაწილები', money(pts), 'გაცემული − დაბრუნებული')}${kpi('მომსახურება', money(tot - pts), 'ფასიანი მომსახურება')}${kpi('სერვის ორდერი', os.length, os[0] ? 'ბოლო: ' + fmtD(os[0].date) : '—')}</div>
   <div class="cols">
-   <div class="card"><header><h3>სერვისის ისტორია</h3></header><div class="tw"><table class="t"><thead><tr><th>№</th><th>თარიღი</th><th class="num">გარბენი</th><th>ნაწილები / მომსახურება</th><th class="num">ჯამი</th><th>სტატუსი</th></tr></thead><tbody>
+   <div class="card"><header><h3>სერვისის ისტორია</h3></header><div class="tw"><table class="t"><thead><tr><th>№</th><th>თარიღი</th><th class="num">გარბენი (კმ / საათი)</th><th>ნაწილები / მომსახურება</th><th class="num">ჯამი</th><th>სტატუსი</th></tr></thead><tbody>
    ${os.map(o => `<tr class="click" onclick="go('so','${o.id}')"><td class="mono">${o.id}</td><td>${fmtD(o.date)}</td><td class="num">${qfmt(o.km)}</td><td class="sub" style="max-width:280px">${[...o.parts.map(l => P(l.pid).name), ...o.svcs.map(s => s.name)].map(esc).join(', ') || '—'}</td><td class="num"><b>${money(soCost(o))}</b></td><td>${statusBadge(o)}</td></tr>`).join('') || emptyRow(6, 'ისტორია ცარიელია')}
    </tbody></table></div></div>
    <div>
@@ -729,25 +732,41 @@ async function addFit(vid) {
 }
 
 /* ================= catalog ================= */
-let catModel = 'all', catQ = '';
+// Columns are "make model year" groups. Make and model filters narrow them; at most CAT_COLS are drawn at a time.
+let catMake = 'all', catModel = 'all', catQ = '', catCol = 0;
+const CAT_COLS = 20;
+function catGroups() {
+  const g = new Map();
+  S.vehicles.forEach(v => { const k = modelKey(v); if (!g.has(k)) g.set(k, { key: k, make: v.make, base: v.make + ' ' + v.model, year: v.year || '' }); });
+  return [...g.values()].sort((x, y) => natural(x.base, y.base) || String(x.year).localeCompare(String(y.year)));
+}
 VIEWS.catalog = () => {
-  const allM = models();
-  if (catModel !== 'all' && !allM.includes(catModel)) catModel = 'all';
-  const ms = catModel === 'all' ? allM : [catModel];
+  const groups = catGroups();
+  if (!groups.length) return ph('კატალოგი', 'რომელ ტექნიკაზე რა პროდუქტი ყენდება') + '<div class="card"><div class="empty">კატალოგისთვის ჯერ დაამატეთ ტექნიკა და პროდუქტები</div></div>';
+  const makes = [...new Set(groups.map(g => g.make))].sort(natural);
+  if (catMake !== 'all' && !makes.includes(catMake)) catMake = 'all';
+  const bases = [...new Set(groups.filter(g => catMake === 'all' || g.make === catMake).map(g => g.base))];
+  if (catModel !== 'all' && !bases.includes(catModel)) catModel = 'all';
+  const cols = groups.filter(g => (catMake === 'all' || g.make === catMake) && (catModel === 'all' || g.base === catModel));
+  const pages = Math.ceil(cols.length / CAT_COLS);
+  if (catCol >= pages) catCol = 0;
+  const shown = cols.slice(catCol * CAT_COLS, catCol * CAT_COLS + CAT_COLS), ms = shown.map(g => g.key);
   const ql = catQ.trim().toLowerCase(), n = norm(catQ);
-  // "All models" lists products linked to at least one model; one model lists its links. Search widens to every product.
+  // Without a search the rows are products linked to a visible column; a search lists any product, to link it.
   const linked = p => ms.some(m => catEntry(m, p.id));
   const all = S.products.filter(p => ql ? (p.name.toLowerCase().includes(ql) || norm(p.art).includes(n)) : linked(p));
   const { rows, more } = limited('catalog', all);
   let histN = 0;
   catIndex().forEach(mm => mm.forEach(e => { if (!e.manual && e.hist > 0) histN++; }));
-  if (!allM.length) return ph('კატალოგი', 'რომელ ტექნიკაზე რა პროდუქტი ყენდება') + '<div class="card"><div class="empty">კატალოგისთვის ჯერ დაამატეთ ტექნიკა და პროდუქტები</div></div>';
-  return ph('კატალოგი', 'რომელ ტექნიკაზე რა პროდუქტი ყენდება · ივსება ხელით და სერვის ორდერების ისტორიიდან',
-    `<select onchange="catModel=this.value;LIM={};render()"><option value="all">ყველა მოდელი</option>${allM.map(m => `<option ${catModel === m ? 'selected' : ''}>${esc(m)}</option>`).join('')}</select>` + btn('ისტორიიდან შევსება', "call('catalog.learn',{},n=>n?n+' კავშირი (2+ გამოყენება) დადასტურდა':'ახალი კავშირი ვერ მოიძებნა')", '', 'spark')) +
+  const sel = (id, val, opts, allLabel, on) => `<select id="${id}" onchange="${on}"><option value="all">${allLabel}</option>${opts.map(o => `<option ${val === o ? 'selected' : ''}>${esc(o)}</option>`).join('')}</select>`;
+  const colNav = pages > 1 ? `<span class="sub">სვეტები ${catCol * CAT_COLS + 1}–${catCol * CAT_COLS + shown.length} / ${cols.length}</span>${btn('', 'catCol--;render()', 'sm', 'chevronL', catCol === 0)}${btn('', 'catCol++;render()', 'sm', 'chevronR', catCol >= pages - 1)}` : `<span class="sub">${cols.length} მოდელი / წელი</span>`;
+  return ph('კატალოგი', 'რომელ ტექნიკაზე რა პროდუქტი ყენდება — მარკა, მოდელი და წელი · ივსება ხელით და სერვის ორდერების ისტორიიდან', btn('ისტორიიდან შევსება', "call('catalog.learn',{},n=>n?n+' კავშირი (2+ გამოყენება) დადასტურდა':'ახალი კავშირი ვერ მოიძებნა')", '', 'spark')) +
     `<div class="note ok">${ic('spark')}<div>სერვის ორდერების ისტორიიდან ნაპოვნია <b>${histN}</b> დაუდასტურებელი კავშირი. დააჭირეთ უჯრას ხელით მისაბმელად ან მოსახსნელად. კატალოგი სერვის ორდერში მხოლოდ <b>რეკომენდაციაა</b> და გაცემას არ ზღუდავს.</div></div>
-  <div class="filters"><div class="gsearch" style="max-width:420px">${ic('search')}<input id="catq" placeholder="პროდუქტის ძებნა მისაბმელად — დასახელება ან არტიკული" value="${esc(catQ)}" oninput="catQ=this.value;LIM={};render();refocus('#catq')"></div><span class="sub">${all.length} პროდუქტი${ql ? '' : ' კავშირით'}</span></div>
-  <div class="card"><div class="tw"><table class="t matrix"><thead><tr><th>პროდუქტი</th>${ms.map(m => `<th>${esc(m)}</th>`).join('')}</tr></thead><tbody>
-  ${rows.map(p => `<tr><td><div style="font-weight:500">${esc(p.name)}</div><div class="sub mono">${esc(p.art)}</div></td>${ms.map(m => { const e = catEntry(m, p.id); const cls = e ? (e.manual && e.hist ? 'both' : e.manual ? 'man' : 'hist') : ''; return `<td><button class="mx ${cls}" onclick="call('catalog.toggle',{model:'${esc(jsq(m))}',pid:'${p.id}'},r=>r?'მიება: ${esc(jsq(p.name))}':'ხელით მიბმა მოიხსნა')" title="${e ? (e.manual ? 'ხელით მიბმული' : '') + (e.hist ? ' · ისტორიაში ' + e.hist + '-ჯერ' : '') : 'დააჭირეთ მისაბმელად'}">${e ? (e.hist ? e.hist + '×' : '●') : ''}</button></td>`; }).join('')}</tr>`).join('') || emptyRow(ms.length + 1, ql ? 'ვერ მოიძებნა' : 'კავშირი ჯერ არ არის — მოძებნეთ პროდუქტი მისაბმელად')}
+  <div class="filters">${sel('catmk', catMake, makes, 'ყველა მარკა', "catMake=this.value;catModel='all';catCol=0;LIM={};render()")}${sel('catmd', catModel, bases, 'ყველა მოდელი', 'catModel=this.value;catCol=0;LIM={};render()')}
+   <div class="gsearch" style="max-width:360px">${ic('search')}<input id="catq" placeholder="პროდუქტის ძებნა მისაბმელად" value="${esc(catQ)}" oninput="catQ=this.value;LIM={};render();refocus('#catq')"></div>
+   <span class="sub">${all.length} პროდუქტი${ql ? '' : ' კავშირით'}</span><span style="margin-left:auto;display:flex;gap:6px;align-items:center">${colNav}</span></div>
+  <div class="card"><div class="tw catwrap"><table class="t matrix"><thead><tr><th>პროდუქტი</th>${shown.map(g => `<th title="${esc(g.key)}"><div class="mx-h">${esc(g.base)}</div><div class="sub">${esc(g.year || '—')}</div></th>`).join('')}</tr></thead><tbody>
+  ${rows.map(p => `<tr><td><div style="font-weight:500">${esc(p.name)}</div><div class="sub mono">${esc(p.art)}</div></td>${ms.map(m => { const e = catEntry(m, p.id); const cls = e ? (e.manual && e.hist ? 'both' : e.manual ? 'man' : 'hist') : ''; return `<td><button class="mx ${cls}" onclick="call('catalog.toggle',{model:'${esc(jsq(m))}',pid:'${p.id}'},r=>r?'მიება: ${esc(jsq(p.name))}':'ხელით მიბმა მოიხსნა')" title="${esc(m)}${e ? ' · ' + (e.manual ? 'ხელით მიბმული' : '') + (e.hist ? ' · ისტორიაში ' + e.hist + '-ჯერ' : '') : ' · დააჭირეთ მისაბმელად'}">${e ? (e.hist ? e.hist + '×' : '●') : ''}</button></td>`; }).join('')}</tr>`).join('') || emptyRow(ms.length + 1, ql ? 'ვერ მოიძებნა' : 'ამ სვეტებში კავშირი ჯერ არ არის — მოძებნეთ პროდუქტი მისაბმელად')}
   </tbody></table></div>${more}
   <div class="body legend" style="border-top:1px solid var(--line2);margin:0"><span><i style="background:var(--accent)"></i>ხელით მიბმული</span><span><i style="background:var(--ok-bg);border:1px solid #b6dec6"></i>ისტორიიდან (N× = გამოყენების რაოდენობა)</span><span><i style="background:var(--accent);box-shadow:0 0 0 2px #b6dec6"></i>ორივე</span></div></div>`;
 };
@@ -908,7 +927,12 @@ let imp = blankImp('products');
 const IMP_ST = { new: ['ახალი', 'b-ok'], upd: ['განახლდება', 'b-open'], same: ['უცვლელი', 'b-closed'], err: ['შეცდომა', 'b-low'] };
 function parseCSV(text) {
   text = text.replace(/^﻿/, '');
-  const first = text.split(/\r?\n/)[0], d = (first.match(/;/g) || []).length >= (first.match(/,/g) || []).length ? ';' : ',';
+  // The separator is chosen from the first lines, not the header alone: Excel may save a header with stray ";" and
+  // data with ",". The winner splits the most lines into more than one column (ties: more columns per line).
+  const sample = text.split(/\r?\n/).filter(l => l.trim()).slice(0, 20);
+  const cols = (l, c) => l.replace(/"[^"]*"/g, '').split(c).length;
+  const score = c => [sample.filter(l => cols(l, c) > 1).length, sample.reduce((a, l) => a + cols(l, c), 0)];
+  const d = [';', ',', '\t'].map(c => [c, score(c)]).sort((x, y) => y[1][0] - x[1][0] || y[1][1] - x[1][1])[0][0];
   const rows = []; let row = [], f = '', q = false;
   for (let i = 0; i < text.length; i++) {
     const c = text[i];
@@ -1006,7 +1030,7 @@ function printSO(id) {
   $('#pvSheet').innerHTML = `<div class="sh-head"><div>${c.logo ? `<img class="sh-logo" src="${c.logo}" alt="">` : ''}<div class="sh-org">${esc(c.name)}</div><div>${[c.tin && 'ს/კ: ' + esc(c.tin), esc(c.address), esc(c.phone)].filter(Boolean).join(' · ')}</div><div>${esc(S.wh[1])}</div></div>
    <div style="text-align:right"><h2>სერვის ორდერი</h2><div class="mono" style="font-size:13px">№ ${o.id}</div><div>თარიღი: ${fmtD(o.date)} · სტატუსი: ${st}</div></div></div>
    <table class="kv"><tr><th>სახელმწიფო ნომერი</th><td>${esc(v.plate)}</td><th>VIN კოდი</th><td class="mono">${esc(v.vin)}</td></tr>
-    <tr><th>მარკა / მოდელი</th><td>${esc(modelKey(v))}${v.year ? ', ' + esc(v.year) : ''}</td><th>გარბენი</th><td>${qfmt(o.km)} კმ</td></tr>
+    <tr><th>მარკა / მოდელი</th><td>${esc(modelKey(v))}${v.year ? ', ' + esc(v.year) : ''}</td><th>გარბენი (კმ / საათი)</th><td>${qfmt(o.km)}</td></tr>
     <tr><th>პასუხისმგებელი პირი</th><td colspan="3"><b>${esc(o.resp)}</b></td></tr></table>
    <h3>გაცემული ნაწილები <span style="font-weight:400;font-size:10px">· დალაგებულია ლოკაციის მიხედვით (აღებისთვის)</span></h3><table><thead><tr><th>#</th><th>ლოკაცია</th><th>არტიკული</th><th>დასახელება</th><th>გაცემ.</th><th>დაბრ.</th><th>ერთ.</th><th>ფასი</th><th>ჯამი</th></tr></thead><tbody>
    ${pickOrder(o.parts).map((l, i) => { const p = P(l.pid), loc = p.stock[l.wh].loc; return `<tr><td>${i + 1}</td><td class="mono" style="white-space:nowrap"><b>${esc(loc || '—')}</b>${S.settings.wh2 ? `<div style="font-size:10px">${esc(S.wh[l.wh])}</div>` : ''}</td><td class="mono">${esc(p.art)}</td><td>${esc(p.name)}${l.serials.length ? `<div style="font-size:10px;margin-top:2px">S/N: ${l.serials.map(s => l.retSerials.some(x => sameCode(x, s)) ? esc(s) + ' (დაბრ.)' : esc(s)).join(', ')}</div>` : ''}</td><td class="num">${qfmt(l.qty)}</td><td class="num">${l.ret ? qfmt(l.ret) : ''}</td><td>${esc(p.uom)}</td><td class="num">${money(l.price)}</td><td class="num">${money((l.qty - l.ret) * l.price)}</td></tr>`; }).join('') || '<tr><td colspan="9">—</td></tr>'}

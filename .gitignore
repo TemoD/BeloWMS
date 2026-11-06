@@ -6,3 +6,4 @@ dist-win.log
 .load/
 .load3/
 .perf/
+.demo/

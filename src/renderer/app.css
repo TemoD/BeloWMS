@@ -236,7 +236,7 @@ tr.err td{background:#fdf4f3} tr.upd td{background:#f5f9fe}
 .pv-bar{position:fixed;top:0;left:0;right:0;height:56px;background:#18212d;color:#fff;display:flex;align-items:center;gap:10px;padding:0 20px;z-index:71}
 .pv-bar b{margin-right:auto;font-weight:600}
 .pv-bar .btn:not(.primary){color:var(--ink)}
-.sheet{background:#fff;color:#000;width:210mm;max-width:100%;min-height:297mm;margin:0 auto;padding:16mm 15mm;box-shadow:0 10px 40px rgba(0,0,0,.35);font-size:12px}
+.sheet{background:#fff;color:#000;width:297mm;max-width:100%;min-height:210mm;margin:0 auto;padding:16mm 15mm;box-shadow:0 10px 40px rgba(0,0,0,.35);font-size:12px}
 .sheet h2{margin:0 0 4px;font-size:19px}
 .sheet h3{font-size:13px;margin:16px 0 4px}
 .sheet table{width:100%;border-collapse:collapse;margin:6px 0 4px}
@@ -262,7 +262,7 @@ body.setup .main{grid-template-columns:1fr} body.setup nav.side,body.setup .tool
 
 /* PDF output: printToPDF renders the print media, so only the A4 sheet is shown */
 @media print{
-  @page{size:A4;margin:0}
+  @page{size:A4 landscape;margin:0}
   body{background:#fff}
   body>*:not(#pv){display:none!important}
   #pv{position:static!important;padding:0!important;background:#fff!important;overflow:visible!important}
@@ -291,3 +291,35 @@ body.setup .main{grid-template-columns:1fr} body.setup nav.side,body.setup .tool
 .about-foot{padding:9px 16px;background:#fafbfc;color:var(--faint);font-size:12px;text-align:center;border-radius:0 0 var(--r) var(--r)}
 tr.same td{color:var(--muted)}
 .tag.vin{background:#ede9fe;color:#5b21b6}
+/* landscape A4 form: tighter vertical spacing so a normal order fits one page; long orders break between rows */
+.sheet{padding:11mm 14mm}
+.sh-head{padding-bottom:8px;margin-bottom:10px}
+.sheet h3{margin:10px 0 4px}
+.sh-tot{margin-top:8px}
+.sig{margin-top:22px;line-height:1.45}
+.sh-foot{margin-top:14px}
+.sheet tr,.sig,.sh-tot{break-inside:avoid}
+.sheet thead{display:table-header-group}
+/* service order: returned lines and the suggestion strip under the parts table */
+.t tr.ret td{color:var(--faint);background:#fafbfc}
+.t tr.ret .st{text-decoration:line-through}
+.recstrip{padding:12px 16px 14px;border-top:1px solid var(--line2)}
+.recstrip-h{display:flex;gap:8px;align-items:center;margin-bottom:10px;font-size:13px}
+.recstrip-h .sub{margin-left:4px}
+.recgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:8px}
+.recchip{display:flex;gap:8px;align-items:center;border:1px solid var(--line);border-radius:7px;padding:7px 8px 7px 10px;min-width:0}
+.recchip .n{flex:1;min-width:0}
+.recchip .n>div:first-child{font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.recchip .sub{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.recchip.added{opacity:.55}
+.recchip>svg{color:var(--ok)}
+.recchip .vin{color:#5b21b6;font-weight:600}
+.recchip{cursor:pointer}
+.recchip:hover{border-color:var(--accent-2);background:var(--hover)}
+.recchip.added:hover{opacity:.8}
+.matrix th .mx-h{font-weight:600;white-space:nowrap;max-width:150px;overflow:hidden;text-overflow:ellipsis;margin:0 auto}
+.matrix th .sub{font-weight:500}
+/* catalog: the table scrolls inside its card so the model/year header row and the product column stay visible */
+.catwrap{max-height:calc(100vh - 330px);min-height:240px;overflow:auto}
+.catwrap thead th{position:sticky;top:0;z-index:2;background:#fafbfc;box-shadow:0 1px 0 var(--line)}
+.catwrap thead th:first-child{left:0;z-index:3}

@@ -57,6 +57,13 @@ ALTER TABLE so_parts ADD COLUMN ret_serials TEXT NOT NULL DEFAULT '[]';
 CREATE TABLE fitment(vehicle_id TEXT NOT NULL REFERENCES vehicles(id), product_id TEXT NOT NULL REFERENCES products(id),
   PRIMARY KEY(vehicle_id, product_id));
 CREATE INDEX ix_fitment_product ON fitment(product_id);
+`, `
+-- The catalog groups by make + model + year. Links made per "make model" move to each year that model has;
+-- the old key stays only while some vehicle of that model has no year.
+INSERT OR IGNORE INTO catalog(model, product_id)
+  SELECT DISTINCT c.model || ' ' || v.year, c.product_id FROM catalog c JOIN vehicles v ON v.make || ' ' || v.model = c.model WHERE v.year IS NOT NULL;
+DELETE FROM catalog WHERE model IN (SELECT make || ' ' || model FROM vehicles WHERE year IS NOT NULL)
+  AND model NOT IN (SELECT make || ' ' || model FROM vehicles WHERE year IS NULL);
 `];
 
 /* ---------- low-level helpers ---------- */
@@ -266,7 +273,8 @@ const HEADERS = {
   plate: ['სახ. ნომერი', 'სახელმწიფო ნომერი', 'plate'], vin: ['vin', 'vin კოდი', 'vin / სერიული №', 'სერიული №', 'serial'],
   make: ['მარკა', 'make'], model: ['მოდელი', 'model'], year: ['წელი', 'year'], km: ['გარბენი', 'km', 'mileage'], dept: ['განყოფილება', 'department']
 };
-const hnorm = v => String(v ?? '').toLowerCase().replace(/[\s.\-_/№]+/g, '');
+// Header names are compared without spaces, punctuation or stray separators ("VIN;" counts as "VIN").
+const hnorm = v => String(v ?? '').toLowerCase().replace(/[\s.\-_/№;,"']+/g, '');
 // Puts each row's cells in IMPORT_COLS order. A first row with at least two known header names is used as the header.
 function importRows(type, rows) {
   const cols = IMPORT_COLS[type] || fail('უცნობი იმპორტის ტიპი');
@@ -278,6 +286,8 @@ function importRows(type, rows) {
 }
 const okNum = (v, min = 0) => str(v) === '' || num(v) >= min;
 const r2 = n => Math.round(n * 100) / 100;
+// Catalog group of a vehicle: "make model year" (year left out when unknown). Same rule as modelKey() in app.js.
+const MODEL_SQL = "v.make || ' ' || v.model || COALESCE(' ' || v.year, '')";
 // st: new | upd (changes listed in msg) | same (nothing to change) | err (reason in msg).
 function importCheck(type, rows) {
   const seen = new Set();
@@ -641,9 +651,9 @@ const commands = {
   },
   'catalog.learn'() {
     return run(`INSERT OR IGNORE INTO catalog(model, product_id)
-      SELECT v.make || ' ' || v.model, p.product_id FROM so_parts p
+      SELECT ${MODEL_SQL}, p.product_id FROM so_parts p
       JOIN service_orders o ON o.id = p.so_id JOIN vehicles v ON v.id = o.vehicle_id
-      WHERE p.qty - p.ret > 0 GROUP BY v.make || ' ' || v.model, p.product_id HAVING COUNT(DISTINCT o.id) >= 2`).changes;
+      WHERE p.qty - p.ret > 0 GROUP BY ${MODEL_SQL}, p.product_id HAVING COUNT(DISTINCT o.id) >= 2`).changes;
   },
   'import.check'({ type, rows, replace }) {
     if (type === 'fitment') {

@@ -80,7 +80,7 @@ function registerIpc() {
   handle('pdf.save', async name => {
     const r = await dialog.showSaveDialog(win, { title: 'PDF-ად შენახვა', defaultPath: path.join(app.getPath('documents'), String(name || 'document.pdf')), filters: [{ name: 'PDF', extensions: ['pdf'] }] });
     if (r.canceled || !r.filePath) return { ok: true, result: null };
-    const data = await win.webContents.printToPDF({ pageSize: 'A4', printBackground: true, margins: { marginType: 'none' } });
+    const data = await win.webContents.printToPDF({ pageSize: 'A4', landscape: true, printBackground: true, margins: { marginType: 'none' } });
     fs.writeFileSync(r.filePath, data);
     shell.openPath(r.filePath);
     return { ok: true, result: r.filePath };

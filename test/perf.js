@@ -36,8 +36,11 @@ module.exports = function perf(win, { app }) {
       await page('stock', `go('stock')`);
       await page('vehicles', `go('vehicles')`);
       await page('vehicle-detail', `go('vehicle',S.vehicles[0].id)`);
-      await page('catalog-all', `catModel='all';go('catalog')`);
-      await page('catalog-one-model', `catModel=models()[0];render()`);
+      await page('catalog-all', `catMake='all';catModel='all';catCol=0;go('catalog')`);
+      res['catalog columns'] = await js(`return {groups:catGroups().length,drawn:document.querySelectorAll('.matrix thead th').length-1}`);
+      await page('catalog-one-model', `const g=catGroups()[0];catMake=g.make;catModel=g.base;render();$('#content').scrollTop=0`);
+      await page('catalog-scrolled', `$('.catwrap').scrollTop=600`);
+      res['catalog: click a cell'] = await js(`const b=document.querySelector('.matrix tbody .mx');const t=performance.now();b.click();await new Promise(r=>setTimeout(r,300));return +(performance.now()-t-300).toFixed(1)`);
       await page('suppliers', `go('suppliers')`);
       await page('reports-vehicles', `repTab='veh';go('reports')`);
       await page('reports-stock', `repTab='stock';render()`);
@@ -45,12 +48,13 @@ module.exports = function perf(win, { app }) {
       await page('settings', `go('settings')`);
       await page('settings-about', `[...document.querySelectorAll('h3')].find(h=>h.textContent.includes('პროგრამის შესახებ')).scrollIntoView()`);
       await page('settings-rules', `[...document.querySelectorAll('h3')].find(h=>h.textContent.includes('აღრიცხვის წესები')).scrollIntoView()`);
-      res['catalogRec switch'] = await js(`await call('settings.set',{key:'catalogRec',value:false});go('so',S.sos.find(o=>o.status==='open').id);const hidden=!document.body.innerText.includes('რეკომენდაცია კატალოგიდან');await call('settings.set',{key:'catalogRec',value:true});render();return {hiddenWhenOff:hidden,shownWhenOn:document.body.innerText.includes('რეკომენდაცია კატალოგიდან')}`);
+      res['catalogRec switch'] = await js(`await call('settings.set',{key:'catalogRec',value:false});go('so',S.sos.find(o=>o.status==='open').id);const hidden=!document.body.innerText.includes('შემოთავაზება ამ ტექნიკისთვის');await call('settings.set',{key:'catalogRec',value:true});render();return {hiddenWhenOff:hidden,shownWhenOn:document.body.innerText.includes('შემოთავაზება ამ ტექნიკისთვის')}`);
       res['fitment template build'] = await js(`const orig=saveText;let len=0;saveText=(n,c)=>{len=c.length};imp=blankImp('fitment');const t=performance.now();impTemplate();const d=performance.now()-t;saveText=orig;return {ms:+d.toFixed(0),MB:+(len/1048576).toFixed(1)}`);
       res['vehicle with VIN parts'] = await js(`const v=S.vehicles.find(x=>fitOf(x.id).length);if(!v)return 'no links';const t=performance.now();go('vehicle',v.id);await new Promise(r=>requestAnimationFrame(()=>setTimeout(r)));return {ms:+(performance.now()-t).toFixed(1),parts:fitOf(v.id).length,listed:document.querySelectorAll('.card .rec').length}`);
       fs.writeFileSync(path.join(out, 'vehicle-fitment.png'), (await win.webContents.capturePage()).toPNG());
-      res['SO with VIN recommendations'] = await js(`const o=S.sos.find(x=>x.status==='open'&&fitOf(x.vid).length);if(!o)return 'none';const t=performance.now();go('so',o.id);await new Promise(r=>requestAnimationFrame(()=>setTimeout(r)));return {ms:+(performance.now()-t).toFixed(1),vinTags:document.querySelectorAll('.tag.vin').length}`);
+      res['SO with VIN recommendations'] = await js(`const o=S.sos.find(x=>x.status==='open'&&fitOf(x.vid).length);if(!o)return 'none';const t=performance.now();go('so',o.id);await new Promise(r=>requestAnimationFrame(()=>setTimeout(r)));return {ms:+(performance.now()-t).toFixed(1),vinTags:document.querySelectorAll('.recchip .vin').length}`);
       fs.writeFileSync(path.join(out, 'so-fitment.png'), (await win.webContents.capturePage()).toPNG());
+      res['pick suggestion, qty 3, Enter'] = await js(`const o=S.sos.find(x=>x.status==='open'&&fitOf(x.vid).length);go('so',o.id);const before=SO(o.id).parts.length;const chip=document.querySelector('.recchip');chip.click();const filled=$('#sop').value;const focused=document.activeElement.id;const issuedOnClick=SO(o.id).parts.length!==before;$('#soqty').value=3;$('#soqty').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter'}));await new Promise(r=>setTimeout(r,400));const l=SO(o.id).parts.at(-1);return {filled:!!filled,focused,issuedOnClick,lines:SO(o.id).parts.length-before,qty:l.qty}`);
       res['global-search-keystroke'] = await js(`$('#gs').value='SN000';const t=performance.now();gSearch();return +(performance.now()-t).toFixed(1)`);
       await js(`$('#gsr').hidden=true;$('#gs').value=''`);
       // A full command round trip: IPC, database, new state, re-render.
@@ -62,7 +66,7 @@ module.exports = function perf(win, { app }) {
       res['export: moves CSV build'] = await js(`const orig=saveText;let len=0;saveText=(n,c)=>{len=c.length};const t=performance.now();repTab='moves';exportReport();const d=performance.now()-t;saveText=orig;return {ms:+d.toFixed(1),chars:len}`);
       const t = Date.now();
       await js(`printSO(S.sos[5].id)`);
-      await win.webContents.printToPDF({ pageSize: 'A4', printBackground: true, margins: { marginType: 'none' } });
+      await win.webContents.printToPDF({ pageSize: 'A4', landscape: true, printBackground: true, margins: { marginType: 'none' } });
       res['pdf: service order'] = Date.now() - t;
       await js(`closePrint()`);
       res.heapMB = await js(`return performance.memory?+(performance.memory.usedJSHeapSize/1048576).toFixed(1):null`);

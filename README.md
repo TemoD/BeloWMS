@@ -20,7 +20,7 @@ Rules enforced in the database layer:
 - Cost is a weighted average, recalculated on every purchase order.
 - Saving a purchase order puts the goods in stock immediately.
 - Open service orders close automatically N days (default 7) after their **last change**, and can be reopened.
-- The catalog is a recommendation only; it never blocks issuing a part.
+- The catalog is a recommendation only; it never blocks issuing a part. It groups vehicles by make + model + year (e.g. `JCB 3CX 2020`); a vehicle without a year is grouped by make + model.
 - Fitment per exact vehicle (VIN) comes from a matrix CSV (first column VIN, column headers are article numbers, a mark such as `1`/`x`/`✓` means the part fits) or from the vehicle page; it is shown first among a service order's recommendations. The import adds links; the replace option rewrites the links of the VINs in the file.
 - Products and their stock are imported from one CSV; columns are matched by header name (earlier templates still work), and an empty cell on an existing product leaves the value unchanged.
 - Locations are a managed list per warehouse (free codes such as `A-01-02` or `ZONE-3`); a product can only be placed on an active location from the list. Renaming a location moves its products; only empty locations can be deleted. CSV import adds unknown locations to the list.
@@ -36,6 +36,7 @@ npm install
 npm start          # run the app
 npm test           # business-rule tests (Node 22.5+)
 npm run smoke      # drives the real window through the main flows, screenshots in .smoke/out
+npm run demo       # builds a presentation database in .demo (800 products, 100 vehicles, 500 service orders) and opens it
 ```
 
 ## Building the Windows installer
